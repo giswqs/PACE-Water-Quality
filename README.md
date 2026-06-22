@@ -110,10 +110,10 @@ smeared across open water. Each GeoTIFF is written with internal tiling
 A GitHub Actions workflow (`.github/workflows/daily.yml`) runs every day
 (and on demand via *Run workflow*). It downloads the most recent PACE scene,
 runs inference, and uploads the resulting GeoTIFFs to the repository's
-**`latest`** release, so the newest products are always available at:
+**`PACE-Data`** release, so the newest products are always available at:
 
 ```
-https://github.com/giswqs/PACE-Water-Quality/releases/tag/latest
+https://github.com/giswqs/PACE-Water-Quality/releases/tag/PACE-Data
 ```
 
 Because output filenames include the acquisition date, products from
