@@ -464,13 +464,16 @@ def parse_acquisition_date(nc_path):
     return match.group(1)
 
 
-def process_scene(nc_path, models, save_dir):
+def process_scene(nc_path, models, save_dir, keep_nc=False):
     """Run inference on one PACE scene and write the NetCDF + COG products.
 
     Args:
         nc_path (str): Path to the input PACE L2 AOP NetCDF file.
         models (dict): Loaded models/scalers from :func:`load_models`.
         save_dir (str): Directory to write the products into.
+        keep_nc (bool): If False (default), the intermediate products NetCDF
+            is deleted once the GeoTIFFs are written. The COGs are the
+            deliverable, so this avoids accumulating large NetCDF files.
 
     Returns:
         list[str]: Paths to the written COG files.
@@ -532,4 +535,9 @@ def process_scene(nc_path, models, save_dir):
             )
         )
     products_ds.close()
+
+    # The COGs are the deliverable; drop the intermediate NetCDF to save space.
+    if not keep_nc and os.path.exists(products_nc):
+        os.remove(products_nc)
+
     return cog_paths
