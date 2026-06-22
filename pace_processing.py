@@ -309,6 +309,8 @@ def save_product_to_cog(
     resolution=None,
     nodata=-9999.0,
     footprint_factor=1.5,
+    fill_gaps=True,
+    max_gap_cells=5,
 ):
     """Grid a PACE swath product onto a regular grid and write a COG.
 
@@ -320,9 +322,15 @@ def save_product_to_cog(
     finer than the native pixel spacing. Because the retrieval is a sparse
     coastal footprint (clear-water pixels between clouds), grid cells whose
     nearest valid pixel is farther than ``footprint_factor`` cells away are
-    set to nodata so values are not smeared across open water/land. The
-    result is written as a Cloud Optimized GeoTIFF with internal tiling,
-    overviews and DEFLATE compression, then validated.
+    set to nodata so values are not smeared across open water/land.
+
+    With ``fill_gaps`` enabled, interior holes (clouds/flagged pixels/scan
+    gaps that are *enclosed* by valid data) are filled: small gaps are
+    bridged with a morphological closing and fully-enclosed holes are filled,
+    then the nearest-neighbour values are pulled into those cells. The true
+    outer boundary of the footprint is left as nodata, so open ocean/land is
+    not filled. The result is written as a Cloud Optimized GeoTIFF with
+    internal tiling, overviews and DEFLATE compression, then validated.
 
     Args:
         out_tif (str): Output GeoTIFF path.
@@ -334,12 +342,20 @@ def save_product_to_cog(
         nodata (float): Value used for empty cells.
         footprint_factor (float): Cells farther than this many grid cells
             from the nearest valid pixel are masked to nodata.
+        fill_gaps (bool): If True, fill interior holes enclosed by data.
+        max_gap_cells (int): Bridge nodata gaps up to roughly this many cells
+            wide before filling enclosed holes.
 
     Returns:
         str: The path to the validated COG.
     """
     from scipy.interpolate import griddata
     from scipy.spatial import cKDTree
+    from scipy.ndimage import (
+        binary_closing,
+        binary_fill_holes,
+        generate_binary_structure,
+    )
 
     lat = np.asarray(lat_2d, dtype=np.float64).ravel()
     lon = np.asarray(lon_2d, dtype=np.float64).ravel()
@@ -379,6 +395,16 @@ def save_product_to_cog(
     dist = tree.query(np.column_stack([mesh_lon.ravel(), mesh_lat.ravel()]))[0]
     dist = dist.reshape(mesh_lon.shape)
     inside = dist <= resolution * footprint_factor
+
+    # Fill interior holes (clouds/flagged pixels/scan gaps) enclosed by data,
+    # without expanding the true outer boundary into open ocean/land.
+    if fill_gaps:
+        struct = generate_binary_structure(2, 2)  # 8-connectivity
+        coverage = binary_closing(inside, structure=struct, iterations=max_gap_cells)
+        coverage = binary_fill_holes(coverage)
+        # Closing can bleed past the boundary; keep only cells that still have
+        # a nearby valid pixel, plus the newly enclosed interior holes.
+        inside = coverage & (dist <= resolution * (footprint_factor + max_gap_cells))
 
     grid = np.full((nrow, ncol), nodata, dtype=np.float32)
     grid[inside] = gridded[inside].astype(np.float32)
