@@ -109,23 +109,24 @@ smeared across open water. Each GeoTIFF is written with internal tiling
 
 A GitHub Actions workflow (`.github/workflows/daily.yml`) runs every day
 (and on demand via *Run workflow*). It downloads the most recent PACE scene,
-runs inference, and uploads the resulting GeoTIFFs to the repository's
-**`PACE-Data`** release, so the newest products are always available at:
+runs inference, and publishes the resulting GeoTIFFs to two places:
 
-```
-https://github.com/giswqs/PACE-Water-Quality/releases/tag/PACE-Data
-```
+- the repository's **`PACE-Data`** release:
+  https://github.com/giswqs/PACE-Water-Quality/releases/tag/PACE-Data
+- the **Hugging Face dataset** (under `cogs/`):
+  https://huggingface.co/datasets/giswqs/PACE-Water-Quality
 
 Because output filenames include the acquisition date, products from
-different dates accumulate in the release while same-date files are replaced.
+different dates accumulate while same-date files are replaced.
 
 ### Required repository secrets
 
-The workflow needs NASA Earthdata credentials. Add them under
+The workflow needs the following secrets under
 **Settings → Secrets and variables → Actions**:
 
-- `EARTHDATA_USERNAME`
-- `EARTHDATA_PASSWORD`
+- `EARTHDATA_USERNAME` — NASA Earthdata login
+- `EARTHDATA_PASSWORD` — NASA Earthdata password
+- `HF_TOKEN` — Hugging Face token with write access to the dataset
 
 The `data/` and `output/` folders are git-ignored, so large scenes and
 products are never committed; the daily run regenerates them and publishes

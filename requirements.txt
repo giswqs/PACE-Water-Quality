@@ -24,6 +24,9 @@ h5netcdf>=1.6
 hypercoast>=0.24
 earthaccess>=0.14
 
+# Publishing products to the Hugging Face Hub
+huggingface_hub>=0.26
+
 # Tables & plotting (used by code/plot_and_save.py)
 pandas>=2.2
 matplotlib>=3.10
