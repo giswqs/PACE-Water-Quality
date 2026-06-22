@@ -6,18 +6,18 @@ import matplotlib.pyplot as plt
 import os
 import hypercoast
 from scipy.interpolate import griddata
-from torch.utils.data import DataLoader, TensorDataset
 import rasterio
 from rasterio.transform import from_origin
 from netCDF4 import Dataset
 import re
+
 
 def preprocess_pace_data_Robust(
     nc_path,
     scaler_Rrs,
     use_diff=False,
     full_band_wavelengths=None,
-    use_spectral_mask=True   
+    use_spectral_mask=True,
 ):
     print(f"📥 Start processing: {nc_path}")
 
@@ -46,10 +46,14 @@ def preprocess_pace_data_Robust(
         if missing:
             raise ValueError(f"❌ Missing wavelengths: {missing}")
 
-        indices = [np.where(pace_band_wavelengths == b)[0][0] for b in full_band_wavelengths]
+        indices = [
+            np.where(pace_band_wavelengths == b)[0][0] for b in full_band_wavelengths
+        ]
         band_wavelengths = pace_band_wavelengths[indices]
 
-        assert (band_wavelengths == np.array(full_band_wavelengths)).all(), "❌ Band order mismatch"
+        assert (
+            band_wavelengths == np.array(full_band_wavelengths)
+        ).all(), "❌ Band order mismatch"
 
         filtered_Rrs = Rrs[:, :, indices]
         print(f"✅ [3] Bands extracted: {len(indices)}")
@@ -85,10 +89,10 @@ def preprocess_pace_data_Robust(
         # ============================
         if use_diff:
             from scipy.ndimage import gaussian_filter1d
-            Rrs_smoothed = np.array([
-                gaussian_filter1d(spectrum, sigma=1)
-                for spectrum in valid_test_data
-            ])
+
+            Rrs_smoothed = np.array(
+                [gaussian_filter1d(spectrum, sigma=1) for spectrum in valid_test_data]
+            )
             Rrs_processed = np.diff(Rrs_smoothed, axis=1)
             print("✅ [5] Gaussian smoothing + diff applied")
         else:
@@ -116,23 +120,36 @@ def preprocess_pace_data_Robust(
         print(f"❌ [ERROR] Failed to process file {nc_path}: {e}")
         return None
 
-def infer_and_visualize_single_model_Robust(model, test_loader, Rrs, mask, latitude, longitude,
-                                     save_folder, extent, rgb_image, structure_name,
-                                     TSS_scalers_dict, vmin=0, vmax=50):
+
+def infer_and_visualize_single_model_Robust(
+    model,
+    test_loader,
+    Rrs,
+    mask,
+    latitude,
+    longitude,
+    save_folder,
+    extent,
+    rgb_image,
+    structure_name,
+    TSS_scalers_dict,
+    vmin=0,
+    vmax=50,
+):
     device = next(model.parameters()).device
     predictions_all = []
     with torch.no_grad():
         for batch in test_loader:
             batch = batch[0].to(device)
             output_dict = model(batch)
-            predictions = output_dict['pred_y']
+            predictions = output_dict["pred_y"]
 
             # === Inverse transform using TSS_scalers_dict from training ===
-            predictions_log = TSS_scalers_dict['robust'].inverse_transform(
+            predictions_log = TSS_scalers_dict["robust"].inverse_transform(
                 torch.tensor(predictions.cpu().numpy(), dtype=torch.float32)
             )
             predictions_all.append(
-                TSS_scalers_dict['log'].inverse_transform(predictions_log).numpy()
+                TSS_scalers_dict["log"].inverse_transform(predictions_log).numpy()
             )
 
     predictions_all = np.vstack(predictions_all).squeeze(-1)
@@ -169,30 +186,40 @@ def infer_and_visualize_single_model_Robust(model, test_loader, Rrs, mask, latit
     grid_lat = np.arange(extent[3], extent[2], -resolution_deg_lat)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
     tss_resampled = griddata(
-        (longitude_masked, latitude_masked), tss_values,
-        (grid_lon, grid_lat), method='linear'
+        (longitude_masked, latitude_masked),
+        tss_values,
+        (grid_lon, grid_lat),
+        method="linear",
     )
     tss_resampled = np.ma.masked_invalid(tss_resampled)
 
     plt.figure(figsize=(24, 6))
-    plt.imshow(rgb_image / 255.0, extent=extent, origin='upper')
-    im = plt.imshow(tss_resampled, extent=extent, cmap='jet',
-                    alpha=1, origin='upper', vmin=vmin, vmax=vmax)
+    plt.imshow(rgb_image / 255.0, extent=extent, origin="upper")
+    im = plt.imshow(
+        tss_resampled,
+        extent=extent,
+        cmap="jet",
+        alpha=1,
+        origin="upper",
+        vmin=vmin,
+        vmax=vmax,
+    )
     cbar = plt.colorbar(im)
-    #cbar.set_label('(mg m$^{-3}$)', fontsize=16)
-    plt.title(f"{structure_name}", loc='left', fontsize=20)
-    plt.savefig(png_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
-    plt.show()  
+    # cbar.set_label('(mg m$^{-3}$)', fontsize=16)
+    plt.title(f"{structure_name}", loc="left", fontsize=20)
+    plt.savefig(png_path, dpi=300, bbox_inches="tight", pad_inches=0.1)
+    plt.show()
     plt.close()
 
-    return final_output  
+    return final_output
+
 
 def preprocess_pace_data_minmax(
     nc_path,
     full_band_wavelengths=None,
     diff_before_norm=False,
     diff_after_norm=False,
-    use_spectral_mask=True   # 👈 新增
+    use_spectral_mask=True,  # 👈 新增
 ):
     try:
         # === Load data ===
@@ -218,10 +245,14 @@ def preprocess_pace_data_minmax(
         if missing:
             raise ValueError(f"❌ Missing wavelengths: {missing}")
 
-        indices = [np.where(pace_band_wavelengths == b)[0][0] for b in full_band_wavelengths]
+        indices = [
+            np.where(pace_band_wavelengths == b)[0][0] for b in full_band_wavelengths
+        ]
         band_wavelengths = pace_band_wavelengths[indices]
 
-        assert (band_wavelengths == np.array(full_band_wavelengths)).all(), "❌ Band order mismatch"
+        assert (
+            band_wavelengths == np.array(full_band_wavelengths)
+        ).all(), "❌ Band order mismatch"
 
         filtered_Rrs = Rrs[:, :, indices]
 
@@ -256,10 +287,10 @@ def preprocess_pace_data_minmax(
         # ============================
         if diff_before_norm or diff_after_norm:
             from scipy.ndimage import gaussian_filter1d
-            Rrs_smoothed = np.array([
-                gaussian_filter1d(spectrum, sigma=1)
-                for spectrum in valid_data
-            ])
+
+            Rrs_smoothed = np.array(
+                [gaussian_filter1d(spectrum, sigma=1) for spectrum in valid_data]
+            )
             print("✅ Gaussian smoothing applied")
         else:
             Rrs_smoothed = valid_data
@@ -280,10 +311,12 @@ def preprocess_pace_data_minmax(
         # ============================
         scalers = [MinMaxScaler((1, 10)) for _ in range(Rrs_preprocessed.shape[0])]
 
-        Rrs_normalized = np.array([
-            scalers[i].fit_transform(row.reshape(-1, 1)).flatten()
-            for i, row in enumerate(Rrs_preprocessed)
-        ])
+        Rrs_normalized = np.array(
+            [
+                scalers[i].fit_transform(row.reshape(-1, 1)).flatten()
+                for i, row in enumerate(Rrs_preprocessed)
+            ]
+        )
 
         # ============================
         # diff after norm
@@ -306,29 +339,32 @@ def preprocess_pace_data_minmax(
         print(f"❌ [ERROR] Failed to process file {nc_path}: {e}")
         return None
 
+
 def preprocess_emit_data_Robust(
     nc_path,
     scaler_Rrs,
     use_diff=False,
     full_band_wavelengths=None,
-    use_spectral_mask=True   # 👈 新增
+    use_spectral_mask=True,  # 👈 新增
 ):
 
     if full_band_wavelengths is None:
-        raise ValueError("full_band_wavelengths must be provided to match EMIT Rrs bands")
+        raise ValueError(
+            "full_band_wavelengths must be provided to match EMIT Rrs bands"
+        )
 
     def find_closest_band(target, available_bands):
         rrs_bands = [b for b in available_bands if b.startswith("Rrs_")]
-        available_waves = [int(b.split('_')[1]) for b in rrs_bands]
+        available_waves = [int(b.split("_")[1]) for b in rrs_bands]
         if not available_waves:
             raise ValueError("❌ No Rrs_* bands found in dataset")
         closest_wave = min(available_waves, key=lambda w: abs(w - target))
-        return f'Rrs_{closest_wave}'   
+        return f"Rrs_{closest_wave}"
 
     dataset = Dataset(nc_path)
 
-    latitude = dataset.variables['lat'][:]
-    longitude = dataset.variables['lon'][:]
+    latitude = dataset.variables["lat"][:]
+    longitude = dataset.variables["lon"][:]
 
     all_vars = dataset.variables.keys()
 
@@ -337,7 +373,7 @@ def preprocess_emit_data_Robust(
     # ============================
     bands_to_extract = []
     for w in full_band_wavelengths:
-        band_name = f'Rrs_{int(w)}'
+        band_name = f"Rrs_{int(w)}"
         if band_name in all_vars:
             bands_to_extract.append(band_name)
         else:
@@ -353,8 +389,16 @@ def preprocess_emit_data_Robust(
     # ============================
     mask_nanfree = np.all(~np.isnan(filtered_Rrs), axis=2)
 
-    target_443 = f'Rrs_443' if 'Rrs_443' in bands_to_extract else find_closest_band(443, bands_to_extract)
-    target_560 = f'Rrs_560' if 'Rrs_560' in bands_to_extract else find_closest_band(560, bands_to_extract)
+    target_443 = (
+        "Rrs_443"
+        if "Rrs_443" in bands_to_extract
+        else find_closest_band(443, bands_to_extract)
+    )
+    target_560 = (
+        "Rrs_560"
+        if "Rrs_560" in bands_to_extract
+        else find_closest_band(560, bands_to_extract)
+    )
 
     print(f"Using {target_443} and {target_560} for mask check.")
 
@@ -381,10 +425,10 @@ def preprocess_emit_data_Robust(
     # ============================
     if use_diff:
         from scipy.ndimage import gaussian_filter1d
-        Rrs_smoothed = np.array([
-            gaussian_filter1d(spectrum, sigma=1)
-            for spectrum in valid_test_data
-        ])
+
+        Rrs_smoothed = np.array(
+            [gaussian_filter1d(spectrum, sigma=1) for spectrum in valid_test_data]
+        )
         Rrs_processed = np.diff(Rrs_smoothed, axis=1)
         print("✅ [5] Performed Gaussian smoothing + first-order differencing")
     else:
@@ -408,12 +452,13 @@ def preprocess_emit_data_Robust(
 
     return test_loader, filtered_Rrs, mask, latitude, longitude
 
+
 def preprocess_emit_data_minmax(
     nc_path,
     full_band_wavelengths=None,
     diff_before_norm=False,
     diff_after_norm=False,
-    use_spectral_mask=True 
+    use_spectral_mask=True,
 ):
 
     print(f"📥 Start processing: {nc_path}")
@@ -426,13 +471,13 @@ def preprocess_emit_data_minmax(
     try:
         with Dataset(nc_path) as dataset:
 
-            latitude = dataset.variables['lat'][:]
-            longitude = dataset.variables['lon'][:]
+            latitude = dataset.variables["lat"][:]
+            longitude = dataset.variables["lon"][:]
 
             all_vars = set(dataset.variables.keys())
 
             available_wavelengths = [
-                float(v.split('_')[1]) for v in all_vars if v.startswith('Rrs_')
+                float(v.split("_")[1]) for v in all_vars if v.startswith("Rrs_")
             ]
 
             def find_closest_band(target_nm):
@@ -453,7 +498,9 @@ def preprocess_emit_data_minmax(
                     bands_to_extract.append(closest)
 
             seen = set()
-            bands_to_extract = [b for b in bands_to_extract if not (b in seen or seen.add(b))]
+            bands_to_extract = [
+                b for b in bands_to_extract if not (b in seen or seen.add(b))
+            ]
 
             if len(bands_to_extract) == 0:
                 raise ValueError("❌ No usable bands")
@@ -472,16 +519,26 @@ def preprocess_emit_data_minmax(
             # ============================
             # find 440 & 560
             # ============================
-            have_waves = [int(b.split('_')[1]) for b in bands_to_extract]
+            have_waves = [int(b.split("_")[1]) for b in bands_to_extract]
 
             def nearest_idx(target_nm):
                 nearest_w = min(have_waves, key=lambda w: abs(w - target_nm))
                 return bands_to_extract.index(f"Rrs_{nearest_w}")
 
-            idx_440 = bands_to_extract.index("Rrs_440") if "Rrs_440" in bands_to_extract else nearest_idx(440)
-            idx_560 = bands_to_extract.index("Rrs_560") if "Rrs_560" in bands_to_extract else nearest_idx(560)
+            idx_440 = (
+                bands_to_extract.index("Rrs_440")
+                if "Rrs_440" in bands_to_extract
+                else nearest_idx(440)
+            )
+            idx_560 = (
+                bands_to_extract.index("Rrs_560")
+                if "Rrs_560" in bands_to_extract
+                else nearest_idx(560)
+            )
 
-            print(f"✅ Mask bands: {bands_to_extract[idx_440]} & {bands_to_extract[idx_560]}")
+            print(
+                f"✅ Mask bands: {bands_to_extract[idx_440]} & {bands_to_extract[idx_560]}"
+            )
 
             # ============================
             # 🔥 mask（核心）
@@ -489,7 +546,9 @@ def preprocess_emit_data_minmax(
             mask_nanfree = np.all(~np.isnan(filtered_Rrs), axis=2)
 
             if use_spectral_mask:
-                mask_condition = filtered_Rrs[:, :, idx_560] >= filtered_Rrs[:, :, idx_440]
+                mask_condition = (
+                    filtered_Rrs[:, :, idx_560] >= filtered_Rrs[:, :, idx_440]
+                )
                 mask = mask_nanfree & mask_condition
                 print("✅ Spectral mask ENABLED")
             else:
@@ -508,10 +567,10 @@ def preprocess_emit_data_minmax(
         # ============================
         if diff_before_norm or diff_after_norm:
             from scipy.ndimage import gaussian_filter1d
-            Rrs_smoothed = np.array([
-                gaussian_filter1d(spectrum, sigma=1)
-                for spectrum in valid_test_data
-            ])
+
+            Rrs_smoothed = np.array(
+                [gaussian_filter1d(spectrum, sigma=1) for spectrum in valid_test_data]
+            )
         else:
             Rrs_smoothed = valid_test_data
 
@@ -528,10 +587,12 @@ def preprocess_emit_data_minmax(
         # ============================
         scalers = [MinMaxScaler((1, 10)) for _ in range(Rrs_preprocessed.shape[0])]
 
-        Rrs_normalized = np.array([
-            scalers[i].fit_transform(row.reshape(-1, 1)).flatten()
-            for i, row in enumerate(Rrs_preprocessed)
-        ])
+        Rrs_normalized = np.array(
+            [
+                scalers[i].fit_transform(row.reshape(-1, 1)).flatten()
+                for i, row in enumerate(Rrs_preprocessed)
+            ]
+        )
 
         # ============================
         # diff after
@@ -551,9 +612,22 @@ def preprocess_emit_data_minmax(
         print(f"❌ ERROR: {e}")
         return None
 
-def infer_and_visualize_single_model_minmax(model, test_loader, Rrs, mask, latitude, longitude,
-                                            save_folder, extent, rgb_image, structure_name,
-                                            vmin=0, vmax=50, log_offset=0.01):
+
+def infer_and_visualize_single_model_minmax(
+    model,
+    test_loader,
+    Rrs,
+    mask,
+    latitude,
+    longitude,
+    save_folder,
+    extent,
+    rgb_image,
+    structure_name,
+    vmin=0,
+    vmax=50,
+    log_offset=0.01,
+):
     device = next(model.parameters()).device
     predictions_all = []
 
@@ -561,10 +635,10 @@ def infer_and_visualize_single_model_minmax(model, test_loader, Rrs, mask, latit
         for batch in test_loader:
             batch = batch[0].to(device)
             output_dict = model(batch)
-            predictions = output_dict['pred_y']
+            predictions = output_dict["pred_y"]
 
             predictions_np = predictions.cpu().numpy()
-            predictions_original = (10 ** predictions_np) - log_offset
+            predictions_original = (10**predictions_np) - log_offset
             predictions_all.append(predictions_original)
 
     predictions_all = np.vstack(predictions_all).squeeze(-1)
@@ -605,30 +679,51 @@ def infer_and_visualize_single_model_minmax(model, test_loader, Rrs, mask, latit
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
 
     from scipy.interpolate import griddata
+
     tss_resampled = griddata(
-        (longitude_masked, latitude_masked), tss_values,
-        (grid_lon, grid_lat), method='linear'
+        (longitude_masked, latitude_masked),
+        tss_values,
+        (grid_lon, grid_lat),
+        method="linear",
     )
     tss_resampled = np.ma.masked_invalid(tss_resampled)
 
     plt.figure(figsize=(24, 6))
-    plt.imshow(rgb_image / 255.0, extent=extent, origin='upper')
-    im = plt.imshow(tss_resampled, extent=extent, cmap='jet',
-                    alpha=1, origin='upper', vmin=vmin, vmax=vmax)
+    plt.imshow(rgb_image / 255.0, extent=extent, origin="upper")
+    im = plt.imshow(
+        tss_resampled,
+        extent=extent,
+        cmap="jet",
+        alpha=1,
+        origin="upper",
+        vmin=vmin,
+        vmax=vmax,
+    )
     cbar = plt.colorbar(im)
-    cbar.set_label('(mg m$^{-3}$)', fontsize=16)
-    plt.title(f"{structure_name}", loc='left', fontsize=20)
+    cbar.set_label("(mg m$^{-3}$)", fontsize=16)
+    plt.title(f"{structure_name}", loc="left", fontsize=20)
 
-    plt.savefig(png_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
-    plt.show()  
+    plt.savefig(png_path, dpi=300, bbox_inches="tight", pad_inches=0.1)
+    plt.show()
     plt.close()
 
-    return final_output  
+    return final_output
+
 
 def infer_and_visualize_single_model_EMIT_Robust(
-    model, test_loader, Rrs, mask, latitude, longitude,
-    save_folder, rgb_nc_file, structure_name,
-    TSS_scalers_dict, vmin=0, vmax=50, exposure_coefficient=5.0
+    model,
+    test_loader,
+    Rrs,
+    mask,
+    latitude,
+    longitude,
+    save_folder,
+    rgb_nc_file,
+    structure_name,
+    TSS_scalers_dict,
+    vmin=0,
+    vmax=50,
+    exposure_coefficient=5.0,
 ):
     device = next(model.parameters()).device
     predictions_all = []
@@ -640,12 +735,12 @@ def infer_and_visualize_single_model_EMIT_Robust(
             output_dict = model(batch)
 
             # === Inverse transform using scalers ===
-            predictions_log = TSS_scalers_dict['robust'].inverse_transform(
-                torch.tensor(output_dict['pred_y'].cpu().numpy(), dtype=torch.float32)
+            predictions_log = TSS_scalers_dict["robust"].inverse_transform(
+                torch.tensor(output_dict["pred_y"].cpu().numpy(), dtype=torch.float32)
             )
-            predictions_real = TSS_scalers_dict['log'].inverse_transform(
-                predictions_log
-            ).numpy()
+            predictions_real = (
+                TSS_scalers_dict["log"].inverse_transform(predictions_log).numpy()
+            )
             predictions_all.append(predictions_real)
 
     predictions_all = np.vstack(predictions_all).squeeze(-1)
@@ -671,25 +766,25 @@ def infer_and_visualize_single_model_EMIT_Robust(
     # === Construct RGB image from EMIT L2R .nc ===
     with Dataset(rgb_nc_file) as ds:
         # Latitude
-        if 'lat' in ds.variables:
-            lat_var = ds.variables['lat'][:]
-        elif 'latitude' in ds.variables:
-            lat_var = ds.variables['latitude'][:]
+        if "lat" in ds.variables:
+            lat_var = ds.variables["lat"][:]
+        elif "latitude" in ds.variables:
+            lat_var = ds.variables["latitude"][:]
         else:
             raise KeyError("Latitude variable not found")
 
         # Longitude
-        if 'lon' in ds.variables:
-            lon_var = ds.variables['lon'][:]
-        elif 'longitude' in ds.variables:
-            lon_var = ds.variables['longitude'][:]
+        if "lon" in ds.variables:
+            lon_var = ds.variables["lon"][:]
+        elif "longitude" in ds.variables:
+            lon_var = ds.variables["longitude"][:]
         else:
             raise KeyError("Longitude variable not found")
 
         # rhos band list
         band_list = []
         for name in ds.variables:
-            m = re.match(r'^rhos_(\d+(?:\.\d+)?)$', name)
+            m = re.match(r"^rhos_(\d+(?:\.\d+)?)$", name)
             if m:
                 wl = float(m.group(1))
                 band_list.append((wl, name))
@@ -697,25 +792,29 @@ def infer_and_visualize_single_model_EMIT_Robust(
             raise ValueError("No rhos_* bands found")
 
         # Select nearest RGB bands
-        targets = {'R': 664.0, 'G': 559.0, 'B': 492.0}
+        targets = {"R": 664.0, "G": 559.0, "B": 492.0}
+
         def pick_nearest(target_nm):
             return min(band_list, key=lambda x: abs(x[0] - target_nm))[1]
 
-        var_R = pick_nearest(targets['R'])
-        var_G = pick_nearest(targets['G'])
-        var_B = pick_nearest(targets['B'])
+        var_R = pick_nearest(targets["R"])
+        var_G = pick_nearest(targets["G"])
+        var_B = pick_nearest(targets["B"])
 
         R = ds.variables[var_R][:]
         G = ds.variables[var_G][:]
         B = ds.variables[var_B][:]
 
-        if isinstance(R, np.ma.MaskedArray): R = R.filled(np.nan)
-        if isinstance(G, np.ma.MaskedArray): G = G.filled(np.nan)
-        if isinstance(B, np.ma.MaskedArray): B = B.filled(np.nan)
+        if isinstance(R, np.ma.MaskedArray):
+            R = R.filled(np.nan)
+        if isinstance(G, np.ma.MaskedArray):
+            G = G.filled(np.nan)
+        if isinstance(B, np.ma.MaskedArray):
+            B = B.filled(np.nan)
 
     # Lat/lon grid
     if lat_var.ndim == 1 and lon_var.ndim == 1:
-        lat2d, lon2d = np.meshgrid(lat_var, lon_var, indexing='ij')
+        lat2d, lon2d = np.meshgrid(lat_var, lon_var, indexing="ij")
     else:
         lat2d, lon2d = lat_var, lon_var
 
@@ -730,9 +829,15 @@ def infer_and_visualize_single_model_EMIT_Robust(
     grid_lon = np.linspace(lon_min, lon_max, W)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
 
-    R_interp = griddata((lon_flat, lat_flat), R_flat, (grid_lon, grid_lat), method='linear')
-    G_interp = griddata((lon_flat, lat_flat), G_flat, (grid_lon, grid_lat), method='linear')
-    B_interp = griddata((lon_flat, lat_flat), B_flat, (grid_lon, grid_lat), method='linear')
+    R_interp = griddata(
+        (lon_flat, lat_flat), R_flat, (grid_lon, grid_lat), method="linear"
+    )
+    G_interp = griddata(
+        (lon_flat, lat_flat), G_flat, (grid_lon, grid_lat), method="linear"
+    )
+    B_interp = griddata(
+        (lon_flat, lat_flat), B_flat, (grid_lon, grid_lat), method="linear"
+    )
 
     rgb_image = np.stack((R_interp, G_interp, B_interp), axis=-1)
     rgb_max = np.nanmax(rgb_image)
@@ -746,19 +851,26 @@ def infer_and_visualize_single_model_EMIT_Robust(
         (final_output[:, 1], final_output[:, 0]),  # lon, lat
         final_output[:, 2],
         (grid_lon, grid_lat),
-        method='linear'
+        method="linear",
     )
     interp_output = np.ma.masked_invalid(interp_output)
 
     # Plot and save PNG
     plt.figure(figsize=(24, 6))
-    plt.imshow(rgb_image, extent=extent_raw, origin='upper')
-    im = plt.imshow(interp_output, extent=extent_raw, cmap='jet',
-                    alpha=1, origin='upper', vmin=vmin, vmax=vmax)
+    plt.imshow(rgb_image, extent=extent_raw, origin="upper")
+    im = plt.imshow(
+        interp_output,
+        extent=extent_raw,
+        cmap="jet",
+        alpha=1,
+        origin="upper",
+        vmin=vmin,
+        vmax=vmax,
+    )
     cbar = plt.colorbar(im)
-    #cbar.set_label('(mg m$^{-3}$)', fontsize=16)
-    plt.title(f"{structure_name}", loc='left', fontsize=20)
-    plt.savefig(png_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
+    # cbar.set_label('(mg m$^{-3}$)', fontsize=16)
+    plt.title(f"{structure_name}", loc="left", fontsize=20)
+    plt.savefig(png_path, dpi=300, bbox_inches="tight", pad_inches=0.1)
     plt.show()
 
     print(f"✅ Saved {png_path}")
@@ -767,10 +879,21 @@ def infer_and_visualize_single_model_EMIT_Robust(
     # Return numpy array for direct use
     return final_output
 
+
 def infer_and_visualize_single_model_EMIT_minmax(
-    model, test_loader, Rrs, mask, latitude, longitude,
-    save_folder, rgb_nc_file, structure_name,
-    vmin=0, vmax=50, log_offset=0.01, exposure_coefficient=5.0
+    model,
+    test_loader,
+    Rrs,
+    mask,
+    latitude,
+    longitude,
+    save_folder,
+    rgb_nc_file,
+    structure_name,
+    vmin=0,
+    vmax=50,
+    log_offset=0.01,
+    exposure_coefficient=5.0,
 ):
     device = next(model.parameters()).device
     predictions_all = []
@@ -780,9 +903,9 @@ def infer_and_visualize_single_model_EMIT_minmax(
         for batch in test_loader:
             batch = batch[0].to(device)
             output_dict = model(batch)
-            predictions = output_dict['pred_y']
+            predictions = output_dict["pred_y"]
             predictions_np = predictions.cpu().numpy()
-            predictions_original = (10 ** predictions_np) - log_offset
+            predictions_original = (10**predictions_np) - log_offset
             predictions_all.append(predictions_original)
 
     predictions_all = np.vstack(predictions_all).squeeze(-1)
@@ -808,52 +931,60 @@ def infer_and_visualize_single_model_EMIT_minmax(
 
     # === Read RGB bands from .nc file ===
     with Dataset(rgb_nc_file) as ds:
-        if 'lat' in ds.variables:
-            lat_var = ds.variables['lat'][:]
-        elif 'latitude' in ds.variables:
-            lat_var = ds.variables['latitude'][:]
+        if "lat" in ds.variables:
+            lat_var = ds.variables["lat"][:]
+        elif "latitude" in ds.variables:
+            lat_var = ds.variables["latitude"][:]
         else:
             raise KeyError("Latitude variable not found (lat/latitude)")
 
-        if 'lon' in ds.variables:
-            lon_var = ds.variables['lon'][:]
-        elif 'longitude' in ds.variables:
-            lon_var = ds.variables['longitude'][:]
+        if "lon" in ds.variables:
+            lon_var = ds.variables["lon"][:]
+        elif "longitude" in ds.variables:
+            lon_var = ds.variables["longitude"][:]
         else:
             raise KeyError("Longitude variable not found (lon/longitude)")
 
         band_list = []
         for name in ds.variables.keys():
-            m = re.match(r'^rhos_(\d+(?:\.\d+)?)$', name)
+            m = re.match(r"^rhos_(\d+(?:\.\d+)?)$", name)
             if m:
                 wl = float(m.group(1))
                 band_list.append((wl, name))
         if not band_list:
             raise ValueError("No rhos_* bands found in file")
 
-        targets = {'R': 664.0, 'G': 559.0, 'B': 492.0}
+        targets = {"R": 664.0, "G": 559.0, "B": 492.0}
+
         def pick_nearest(target_nm):
             idx = int(np.argmin([abs(w - target_nm) for w, _ in band_list]))
             wl_sel, name_sel = band_list[idx]
             return wl_sel, name_sel
 
-        wl_R, var_R = pick_nearest(targets['R'])
-        wl_G, var_G = pick_nearest(targets['G'])
-        wl_B, var_B = pick_nearest(targets['B'])
+        wl_R, var_R = pick_nearest(targets["R"])
+        wl_G, var_G = pick_nearest(targets["G"])
+        wl_B, var_B = pick_nearest(targets["B"])
 
-        print(f"RGB band selection: R→{var_R} (Δ{wl_R - targets['R']:+.1f}nm), "
-              f"G→{var_G} (Δ{wl_G - targets['G']:+.1f}nm), "
-              f"B→{var_B} (Δ{wl_B - targets['B']:+.1f}nm)")
+        print(
+            f"RGB band selection: R→{var_R} (Δ{wl_R - targets['R']:+.1f}nm), "
+            f"G→{var_G} (Δ{wl_G - targets['G']:+.1f}nm), "
+            f"B→{var_B} (Δ{wl_B - targets['B']:+.1f}nm)"
+        )
 
         R = ds.variables[var_R][:]
         G = ds.variables[var_G][:]
         B = ds.variables[var_B][:]
-        if isinstance(R, np.ma.MaskedArray): R = R.filled(np.nan)
-        if isinstance(G, np.ma.MaskedArray): G = G.filled(np.nan)
-        if isinstance(B, np.ma.MaskedArray): B = B.filled(np.nan)
+        if isinstance(R, np.ma.MaskedArray):
+            R = R.filled(np.nan)
+        if isinstance(G, np.ma.MaskedArray):
+            G = G.filled(np.nan)
+        if isinstance(B, np.ma.MaskedArray):
+            B = B.filled(np.nan)
 
     if lat_var.ndim == 1 and lon_var.ndim == 1:
-        lat2d, lon2d = np.meshgrid(np.asarray(lat_var), np.asarray(lon_var), indexing='ij')
+        lat2d, lon2d = np.meshgrid(
+            np.asarray(lat_var), np.asarray(lon_var), indexing="ij"
+        )
     else:
         lat2d, lon2d = np.asarray(lat_var), np.asarray(lon_var)
 
@@ -868,9 +999,15 @@ def infer_and_visualize_single_model_EMIT_minmax(
     grid_lon = np.linspace(lon_min, lon_max, W)
     grid_lon, grid_lat = np.meshgrid(grid_lon, grid_lat)
 
-    R_interp = griddata((lon_flat, lat_flat), R_flat, (grid_lon, grid_lat), method='linear')
-    G_interp = griddata((lon_flat, lat_flat), G_flat, (grid_lon, grid_lat), method='linear')
-    B_interp = griddata((lon_flat, lat_flat), B_flat, (grid_lon, grid_lat), method='linear')
+    R_interp = griddata(
+        (lon_flat, lat_flat), R_flat, (grid_lon, grid_lat), method="linear"
+    )
+    G_interp = griddata(
+        (lon_flat, lat_flat), G_flat, (grid_lon, grid_lat), method="linear"
+    )
+    B_interp = griddata(
+        (lon_flat, lat_flat), B_flat, (grid_lon, grid_lat), method="linear"
+    )
 
     rgb_image = np.stack((R_interp, G_interp, B_interp), axis=-1)
     rgb_max = np.nanmax(rgb_image)
@@ -883,18 +1020,25 @@ def infer_and_visualize_single_model_EMIT_minmax(
         (final_output[:, 1], final_output[:, 0]),
         final_output[:, 2],
         (grid_lon, grid_lat),
-        method='linear'
+        method="linear",
     )
     interp_output = np.ma.masked_invalid(interp_output)
 
     plt.figure(figsize=(24, 6))
-    plt.imshow(rgb_image, extent=extent_raw, origin='upper')
-    im = plt.imshow(interp_output, extent=extent_raw, cmap='jet',
-                    alpha=1, origin='upper', vmin=vmin, vmax=vmax)
+    plt.imshow(rgb_image, extent=extent_raw, origin="upper")
+    im = plt.imshow(
+        interp_output,
+        extent=extent_raw,
+        cmap="jet",
+        alpha=1,
+        origin="upper",
+        vmin=vmin,
+        vmax=vmax,
+    )
     cbar = plt.colorbar(im)
-    #cbar.set_label('(mg m$^{-3}$)', fontsize=16)
-    plt.title(f"{structure_name}", loc='left', fontsize=20)
-    plt.savefig(png_path, dpi=300, bbox_inches='tight', pad_inches=0.1)
+    # cbar.set_label('(mg m$^{-3}$)', fontsize=16)
+    plt.title(f"{structure_name}", loc="left", fontsize=20)
+    plt.savefig(png_path, dpi=300, bbox_inches="tight", pad_inches=0.1)
     plt.show()
 
     print(f"✅ Saved {png_path}")
@@ -903,15 +1047,15 @@ def infer_and_visualize_single_model_EMIT_minmax(
     # Return numpy array for direct use
     return final_output
 
+
 def preprocess_infer_pace_minmax(
     nc_path,
     model,
     full_band_wavelengths,
     use_spectral_mask=True,
     batch_size=2048,
-    log_offset=1
+    log_offset=1,
 ):
-    import os
     import numpy as np
     import torch
     import hypercoast
@@ -919,7 +1063,6 @@ def preprocess_infer_pace_minmax(
     from torch.utils.data import TensorDataset, DataLoader
     from sklearn.preprocessing import MinMaxScaler
 
-    
     # ============================
     # Read PACE
     # ============================
@@ -933,8 +1076,7 @@ def preprocess_infer_pace_minmax(
     pace_band_wavelengths = da.wavelength.values
 
     indices = [
-        np.where(pace_band_wavelengths == b)[0][0]
-        for b in full_band_wavelengths
+        np.where(pace_band_wavelengths == b)[0][0] for b in full_band_wavelengths
     ]
 
     filtered_Rrs = Rrs[:, :, indices]
@@ -964,20 +1106,20 @@ def preprocess_infer_pace_minmax(
 
     scalers = [MinMaxScaler((1, 10)) for _ in range(valid_data.shape[0])]
 
-    Rrs_normalized = np.array([
-        scalers[i].fit_transform(row.reshape(-1, 1)).flatten()
-        for i, row in enumerate(valid_data)
-    ])
+    Rrs_normalized = np.array(
+        [
+            scalers[i].fit_transform(row.reshape(-1, 1)).flatten()
+            for i, row in enumerate(valid_data)
+        ]
+    )
 
     # ============================
     # DataLoader
     # ============================
     test_loader = DataLoader(
-        TensorDataset(
-            torch.tensor(Rrs_normalized).float()
-        ),
+        TensorDataset(torch.tensor(Rrs_normalized).float()),
         batch_size=batch_size,
-        shuffle=False
+        shuffle=False,
     )
 
     # ============================
@@ -991,10 +1133,10 @@ def preprocess_infer_pace_minmax(
         for batch in test_loader:
             batch = batch[0].to(device)
             output_dict = model(batch)
-            predictions = output_dict['pred_y']
+            predictions = output_dict["pred_y"]
 
             predictions_np = predictions.cpu().numpy()
-            predictions_original = (10 ** predictions_np) - log_offset
+            predictions_original = (10**predictions_np) - log_offset
             predictions_all.append(predictions_original)
 
     predictions_all = np.vstack(predictions_all).squeeze(-1)
@@ -1003,11 +1145,7 @@ def preprocess_infer_pace_minmax(
     # ============================
     # Spatial refill
     # ============================
-    output_map = np.full(
-        mask.shape,
-        np.nan,
-        dtype=np.float32
-    )
+    output_map = np.full(mask.shape, np.nan, dtype=np.float32)
 
     output_map[mask] = predictions_all
 
@@ -1018,13 +1156,12 @@ def preprocess_infer_pace_minmax(
     lon_flat = longitude.flatten()
     pred_flat = output_map.flatten()
 
-    final_output = np.column_stack(
-        (lat_flat, lon_flat, pred_flat)
-    )
+    final_output = np.column_stack((lat_flat, lon_flat, pred_flat))
 
     print(f"Output shape: {final_output.shape}")
 
     return final_output
+
 
 def preprocess_infer_pace_robust(
     nc_path,
@@ -1034,9 +1171,8 @@ def preprocess_infer_pace_robust(
     full_band_wavelengths,
     use_diff=False,
     use_spectral_mask=True,
-    batch_size=2048
+    batch_size=2048,
 ):
-    import os
     import numpy as np
     import torch
     import hypercoast
@@ -1070,25 +1206,18 @@ def preprocess_infer_pace_robust(
         else:
             raise ValueError("Cannot extract wavelength")
 
-        missing = [
-            b for b in full_band_wavelengths
-            if b not in pace_band_wavelengths
-        ]
+        missing = [b for b in full_band_wavelengths if b not in pace_band_wavelengths]
 
         if missing:
             raise ValueError(f"Missing wavelengths: {missing}")
 
         indices = [
-            np.where(pace_band_wavelengths == b)[0][0]
-            for b in full_band_wavelengths
+            np.where(pace_band_wavelengths == b)[0][0] for b in full_band_wavelengths
         ]
 
         band_wavelengths = pace_band_wavelengths[indices]
 
-        if not np.array_equal(
-            band_wavelengths,
-            np.array(full_band_wavelengths)
-        ):
+        if not np.array_equal(band_wavelengths, np.array(full_band_wavelengths)):
             raise ValueError("Band order mismatch")
 
         filtered_Rrs = Rrs[:, :, indices]
@@ -1128,10 +1257,9 @@ def preprocess_infer_pace_robust(
         if use_diff:
             from scipy.ndimage import gaussian_filter1d
 
-            Rrs_smoothed = np.array([
-                gaussian_filter1d(spectrum, sigma=1)
-                for spectrum in valid_test_data
-            ])
+            Rrs_smoothed = np.array(
+                [gaussian_filter1d(spectrum, sigma=1) for spectrum in valid_test_data]
+            )
 
             Rrs_processed = np.diff(Rrs_smoothed, axis=1)
 
@@ -1154,12 +1282,10 @@ def preprocess_infer_pace_robust(
         # DataLoader
         # ============================
         test_loader = DataLoader(
-            TensorDataset(
-                torch.tensor(Rrs_normalized).float()
-            ),
+            TensorDataset(torch.tensor(Rrs_normalized).float()),
             batch_size=batch_size,
             shuffle=False,
-            drop_last=False
+            drop_last=False,
         )
 
         # ============================
@@ -1181,15 +1307,12 @@ def preprocess_infer_pace_robust(
 
                 # Inverse transform using training scalers
                 predictions_log = TSS_scalers_dict["robust"].inverse_transform(
-                    torch.tensor(
-                        predictions_np,
-                        dtype=torch.float32
-                    )
+                    torch.tensor(predictions_np, dtype=torch.float32)
                 )
 
-                predictions_original = TSS_scalers_dict["log"].inverse_transform(
-                    predictions_log
-                ).numpy()
+                predictions_original = (
+                    TSS_scalers_dict["log"].inverse_transform(predictions_log).numpy()
+                )
 
                 predictions_all.append(predictions_original)
 
@@ -1206,17 +1329,13 @@ def preprocess_infer_pace_robust(
         print(
             "Prediction min/max:",
             np.nanmin(predictions_all),
-            np.nanmax(predictions_all)
+            np.nanmax(predictions_all),
         )
 
         # ============================
         # Spatial refill
         # ============================
-        outputs = np.full(
-            mask.shape,
-            np.nan,
-            dtype=np.float32
-        )
+        outputs = np.full(mask.shape, np.nan, dtype=np.float32)
 
         outputs[mask] = predictions_all
 
@@ -1227,9 +1346,7 @@ def preprocess_infer_pace_robust(
         lon_flat = longitude.flatten()
         pred_flat = outputs.flatten()
 
-        final_output = np.column_stack(
-            (lat_flat, lon_flat, pred_flat)
-        )
+        final_output = np.column_stack((lat_flat, lon_flat, pred_flat))
 
         if np.ma.isMaskedArray(final_output):
             final_output = final_output.filled(np.nan)
@@ -1240,13 +1357,9 @@ def preprocess_infer_pace_robust(
         print(f"Failed to process {nc_path}: {e}")
         return None
 
+
 def save_pace_products_to_nc(
-    nc_path,
-    save_dir,
-    chla_output,
-    tss_output,
-    acdom_output,
-    output_name=None
+    nc_path, save_dir, chla_output, tss_output, acdom_output, output_name=None
 ):
     import os
     import numpy as np
@@ -1277,10 +1390,7 @@ def save_pace_products_to_nc(
     expected_pixels = shape[0] * shape[1]
 
     if len(chla) != expected_pixels:
-        raise ValueError(
-            f"Pixel mismatch: "
-            f"{len(chla)} vs {expected_pixels}"
-        )
+        raise ValueError(f"Pixel mismatch: " f"{len(chla)} vs {expected_pixels}")
 
     # =====================================================
     # Reshape
@@ -1296,131 +1406,84 @@ def save_pace_products_to_nc(
     # =====================================================
     if output_name is None:
 
-        output_name = (
-            os.path.splitext(
-                os.path.basename(nc_path)
-            )[0]
-            + "_products.nc"
-        )
+        output_name = os.path.splitext(os.path.basename(nc_path))[0] + "_products.nc"
 
-    output_nc = os.path.join(
-        save_dir,
-        output_name
-    )
+    output_nc = os.path.join(save_dir, output_name)
 
     # =====================================================
     # Create dataset
     # =====================================================
     out_ds = xr.Dataset(
-
         data_vars={
-
             "chla": (
                 ("latitude", "longitude"),
                 chla_map,
-                {
-                    "long_name": "Chlorophyll-a",
-                    "units": "mg m-3"
-                }
+                {"long_name": "Chlorophyll-a", "units": "mg m-3"},
             ),
-
             "tss": (
                 ("latitude", "longitude"),
                 tss_map,
-                {
-                    "long_name": "Total Suspended Solids",
-                    "units": "g m-3"
-                }
+                {"long_name": "Total Suspended Solids", "units": "g m-3"},
             ),
-
             "acdom440": (
                 ("latitude", "longitude"),
                 acdom_map,
-                {
-                    "long_name": "Absorption by CDOM at 440 nm",
-                    "units": "m-1"
-                }
-            )
-
+                {"long_name": "Absorption by CDOM at 440 nm", "units": "m-1"},
+            ),
         },
-
         coords={
-
             "latitude": (
                 ("latitude", "longitude"),
                 latitude_2d,
-                {
-                    "units": "degrees_north"
-                }
+                {"units": "degrees_north"},
             ),
-
             "longitude": (
                 ("latitude", "longitude"),
                 longitude_2d,
-                {
-                    "units": "degrees_east"
-                }
-            )
-
+                {"units": "degrees_east"},
+            ),
         },
-
         attrs={
             "title": "PACE Water Quality Products",
             "sensor": "PACE OCI",
-            "source": "MoE-VAE Inference"
-        }
-
+            "source": "MoE-VAE Inference",
+        },
     )
 
     # =====================================================
     # Compression
     # =====================================================
     encoding = {
-
-        "chla": {
-            "zlib": True,
-            "complevel": 4
-        },
-
-        "tss": {
-            "zlib": True,
-            "complevel": 4
-        },
-
-        "acdom440": {
-            "zlib": True,
-            "complevel": 4
-        }
-
+        "chla": {"zlib": True, "complevel": 4},
+        "tss": {"zlib": True, "complevel": 4},
+        "acdom440": {"zlib": True, "complevel": 4},
     }
 
     # =====================================================
     # Save
     # =====================================================
-    out_ds.to_netcdf(
-        output_nc,
-        encoding=encoding
-    )
+    out_ds.to_netcdf(output_nc, encoding=encoding)
 
     print("Saved:", output_nc)
 
     return output_nc
 
+
 def npy_to_tif(
     npy_input,
     out_tif,
-    resolution_m=1000,      
-    method='linear',           
+    resolution_m=1000,
+    method="linear",
     nodata_val=-9999.0,
-    bbox_padding=0.0,          
+    bbox_padding=0.0,
     lat_col=0,
     lon_col=1,
-    band_cols=None,             
-    band_names=None,          
-    wavelengths=None,          
+    band_cols=None,
+    band_names=None,
+    wavelengths=None,
     crs="EPSG:4326",
     compress="deflate",
-    bigtiff="IF_SAFER"         
+    bigtiff="IF_SAFER",
 ):
     """
     Convert [lat, lon, band1, band2, ...] scattered points into a multi-band GeoTIFF (EPSG:4326).
@@ -1458,8 +1521,10 @@ def npy_to_tif(
     # --- 3) Bounds (+ padding) ---
     lat_min, lat_max = np.nanmin(lat), np.nanmax(lat)
     lon_min, lon_max = np.nanmin(lon), np.nanmax(lon)
-    lat_min -= bbox_padding; lat_max += bbox_padding
-    lon_min -= bbox_padding; lon_max += bbox_padding
+    lat_min -= bbox_padding
+    lat_max += bbox_padding
+    lon_min -= bbox_padding
+    lon_max += bbox_padding
 
     # --- 4) Resolution conversion ---
     lat_center = (lat_min + lat_max) / 2.0
@@ -1482,7 +1547,9 @@ def npy_to_tif(
 
         g = griddata(points=(lon, lat), values=vals, xi=(Lon, Lat), method=method)
         if np.isnan(g).any():
-            g_near = griddata(points=(lon, lat), values=vals, xi=(Lon, Lat), method=method)
+            g_near = griddata(
+                points=(lon, lat), values=vals, xi=(Lon, Lat), method=method
+            )
             g = np.where(np.isnan(g), g_near, g)
 
         grids.append(np.flipud(g).astype(np.float32))

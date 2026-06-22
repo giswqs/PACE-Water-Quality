@@ -1,7 +1,6 @@
 import torch
 import numpy as np
 import os
-import rasterio
 import sys
 import pickle
 import argparse
@@ -14,24 +13,166 @@ from rio_cogeo.profiles import cog_profiles
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, "code"))
 from MoE_VAE import *
-from data_loading import  *
+from data_loading import *
 from plot_and_save import *
 from model_inference import *
-device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
 
 # === Parameters ===
 selected_bands = [
-    400, 403, 405, 408, 410, 413, 415, 418, 420, 422, 425, 427, 430, 432, 435,
-    437, 440, 442, 445, 447, 450, 452, 455, 457, 460, 462, 465, 467, 470, 472,
-    475, 477, 480, 482, 485, 487, 490, 492, 495, 497, 500, 502, 505, 507, 510,
-    512, 515, 517, 520, 522, 525, 527, 530, 532, 535, 537, 540, 542, 545, 547,
-    550, 553, 555, 558, 560, 563, 565, 568, 570, 573, 575, 578, 580, 583, 586,
-    588, 613, 615, 618, 620, 623, 625, 627, 630, 632, 635, 637, 640, 641, 642,
-    643, 645, 646, 647, 648, 650, 651, 652, 653, 655, 656, 657, 658, 660, 661,
-    662, 663, 665, 666, 667, 668, 670, 671, 672, 673, 675, 676, 677, 678, 679,
-    681, 682, 683, 684, 686, 687, 688, 689, 691, 692, 693, 694, 696, 697, 698,
-    699, 701, 702, 703, 704, 706, 707, 708, 709, 711, 712, 713, 714, 717, 719]
+    400,
+    403,
+    405,
+    408,
+    410,
+    413,
+    415,
+    418,
+    420,
+    422,
+    425,
+    427,
+    430,
+    432,
+    435,
+    437,
+    440,
+    442,
+    445,
+    447,
+    450,
+    452,
+    455,
+    457,
+    460,
+    462,
+    465,
+    467,
+    470,
+    472,
+    475,
+    477,
+    480,
+    482,
+    485,
+    487,
+    490,
+    492,
+    495,
+    497,
+    500,
+    502,
+    505,
+    507,
+    510,
+    512,
+    515,
+    517,
+    520,
+    522,
+    525,
+    527,
+    530,
+    532,
+    535,
+    537,
+    540,
+    542,
+    545,
+    547,
+    550,
+    553,
+    555,
+    558,
+    560,
+    563,
+    565,
+    568,
+    570,
+    573,
+    575,
+    578,
+    580,
+    583,
+    586,
+    588,
+    613,
+    615,
+    618,
+    620,
+    623,
+    625,
+    627,
+    630,
+    632,
+    635,
+    637,
+    640,
+    641,
+    642,
+    643,
+    645,
+    646,
+    647,
+    648,
+    650,
+    651,
+    652,
+    653,
+    655,
+    656,
+    657,
+    658,
+    660,
+    661,
+    662,
+    663,
+    665,
+    666,
+    667,
+    668,
+    670,
+    671,
+    672,
+    673,
+    675,
+    676,
+    677,
+    678,
+    679,
+    681,
+    682,
+    683,
+    684,
+    686,
+    687,
+    688,
+    689,
+    691,
+    692,
+    693,
+    694,
+    696,
+    697,
+    698,
+    699,
+    701,
+    702,
+    703,
+    704,
+    706,
+    707,
+    708,
+    709,
+    711,
+    712,
+    713,
+    714,
+    717,
+    719,
+]
 
 # === Command-line arguments ===
 parser = argparse.ArgumentParser(
@@ -70,19 +211,18 @@ chla_model = MoE_VAE(
     latent_dim=32,
     encoder_hidden_dims=[64, 64],
     decoder_hidden_dims=[64, 64],
-    activation='leakyrelu',
-    use_norm='layer',
+    activation="leakyrelu",
+    use_norm="layer",
     use_dropout=False,
     use_softplus_output=True,
     num_experts=4,
     k=2,
-    noisy_gating=True
+    noisy_gating=True,
 ).to(device)
 
 chla_model.load_state_dict(
     torch.load(
-        os.path.join(model_dir, "chl-a", "best_model_minloss.pth"),
-        map_location=device
+        os.path.join(model_dir, "chl-a", "best_model_minloss.pth"), map_location=device
     )
 )
 
@@ -92,7 +232,7 @@ chla_output = preprocess_infer_pace_minmax(
     full_band_wavelengths=selected_bands,
     use_spectral_mask=True,
     batch_size=2048,
-    log_offset=1
+    log_offset=1,
 )
 
 # ============================
@@ -105,32 +245,26 @@ tss_model = MoE_VAE(
     latent_dim=16,
     encoder_hidden_dims=[64, 32],
     decoder_hidden_dims=[32, 64],
-    activation='leakyrelu',
-    use_norm='layer',
+    activation="leakyrelu",
+    use_norm="layer",
     use_dropout=False,
     use_softplus_output=False,
     num_experts=4,
     k=2,
-    noisy_gating=True
+    noisy_gating=True,
 ).to(device)
 
 tss_model.load_state_dict(
     torch.load(
-        os.path.join(model_dir, "tss", "best_model_minloss.pth"),
-        map_location=device
+        os.path.join(model_dir, "tss", "best_model_minloss.pth"), map_location=device
     )
 )
 
-with open(
-    os.path.join(model_dir, "tss", "scalers_Rrs_real.pkl"),
-    "rb"
-) as f:
+with open(os.path.join(model_dir, "tss", "scalers_Rrs_real.pkl"), "rb") as f:
     tss_scalers_Rrs = pickle.load(f)
 
 tss_scalers_dict = torch.load(
-    os.path.join(model_dir, "tss", "scaler.pt"),
-    map_location="cpu",
-    weights_only=False
+    os.path.join(model_dir, "tss", "scaler.pt"), map_location="cpu", weights_only=False
 )
 
 tss_output = preprocess_infer_pace_robust(
@@ -141,7 +275,7 @@ tss_output = preprocess_infer_pace_robust(
     full_band_wavelengths=selected_bands,
     use_diff=False,
     use_spectral_mask=True,
-    batch_size=2048
+    batch_size=2048,
 )
 
 # ============================
@@ -154,32 +288,28 @@ acdom_model = MoE_VAE(
     latent_dim=32,
     encoder_hidden_dims=[256, 128, 64],
     decoder_hidden_dims=[64, 128, 256],
-    activation='leakyrelu',
-    use_norm='layer',
+    activation="leakyrelu",
+    use_norm="layer",
     use_dropout=False,
     use_softplus_output=False,
     num_experts=4,
     k=2,
-    noisy_gating=True
+    noisy_gating=True,
 ).to(device)
 
 acdom_model.load_state_dict(
     torch.load(
-        os.path.join(model_dir, "acdom", "best_model_minloss.pth"),
-        map_location=device
+        os.path.join(model_dir, "acdom", "best_model_minloss.pth"), map_location=device
     )
 )
 
-with open(
-    os.path.join(model_dir, "acdom", "scalers_Rrs_real.pkl"),
-    "rb"
-) as f:
+with open(os.path.join(model_dir, "acdom", "scalers_Rrs_real.pkl"), "rb") as f:
     acdom_scalers_Rrs = pickle.load(f)
 
 acdom_scalers_dict = torch.load(
     os.path.join(model_dir, "acdom", "scaler.pt"),
     map_location="cpu",
-    weights_only=False
+    weights_only=False,
 )
 
 acdom_output = preprocess_infer_pace_robust(
@@ -190,14 +320,14 @@ acdom_output = preprocess_infer_pace_robust(
     full_band_wavelengths=selected_bands,
     use_diff=False,
     use_spectral_mask=True,
-    batch_size=2048
+    batch_size=2048,
 )
 products_nc = save_pace_products_to_nc(
     nc_path=nc_path,
     save_dir=save_dir,
     chla_output=chla_output,
     tss_output=tss_output,
-    acdom_output=acdom_output
+    acdom_output=acdom_output,
 )
 
 
@@ -329,9 +459,7 @@ import xarray as xr
 # "PACE_OCI.20240929T185124.L2.OC_AOP.V3_0.nc" -> "20240929".
 match = re.search(r"(\d{8})T\d{6}", os.path.basename(nc_path))
 if match is None:
-    raise ValueError(
-        f"Could not parse acquisition date from filename: {nc_path}"
-    )
+    raise ValueError(f"Could not parse acquisition date from filename: {nc_path}")
 acq_date = match.group(1)
 
 products_ds = xr.open_dataset(products_nc)

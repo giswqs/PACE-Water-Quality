@@ -91,7 +91,9 @@ by_time = {}
 for g in granules:
     t = acquisition_time(g)
     native_id = g.get("meta", {}).get("native-id", "")
-    if t and (t not in by_time or native_id > by_time[t].get("meta", {}).get("native-id", "")):
+    if t and (
+        t not in by_time or native_id > by_time[t].get("meta", {}).get("native-id", "")
+    ):
         by_time[t] = g
 
 latest = [by_time[t] for t in sorted(by_time, reverse=True)][:NUM_SCENES]
