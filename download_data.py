@@ -1,0 +1,110 @@
+"""Download PACE OCI L2 AOP scenes over a specified date range.
+
+Uses HyperCoast's ``search_pace`` / ``download_pace`` (which wrap NASA
+``earthaccess``) to fetch granules over a region of interest and date range
+into the local ``data`` folder. The granules match the same product type as
+the bundled test scene (``PACE_OCI.*.L2.OC_AOP.*.nc``), so they can be fed
+straight into ``run.py``.
+
+For downloading only the most recent scene instead, use ``download_latest.py``.
+
+Examples::
+
+    python download_data.py 2024-07-01 2024-07-31
+    python download_data.py 2024-07-01 2024-07-31 --count 5
+    python download_data.py 2024-09-29 2024-09-29 --bbox -99 18 -78 42
+
+A NASA Earthdata login is required. Credentials are read from ``~/.netrc``
+(or the ``EARTHDATA_USERNAME`` / ``EARTHDATA_PASSWORD`` environment
+variables). Create a free account at https://urs.earthdata.nasa.gov if needed.
+"""
+
+import os
+import argparse
+
+import earthaccess
+import hypercoast
+
+# Resolve paths relative to this script so it can run from any location.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Default bounding box over the Gulf of Mexico / U.S. Gulf coast, matching the
+# region covered by the bundled test scene. [xmin, ymin, xmax, ymax]
+DEFAULT_BBOX = (-98.0, 18.0, -80.0, 31.0)
+SHORT_NAME = "PACE_OCI_L2_AOP"  # surface reflectance (Rrs) product
+
+# === Command-line arguments ===
+parser = argparse.ArgumentParser(
+    description="Download PACE OCI L2 AOP scenes over a specified date range."
+)
+parser.add_argument("start", help="Start date (YYYY-MM-DD).")
+parser.add_argument("end", help="End date (YYYY-MM-DD), inclusive.")
+parser.add_argument(
+    "--count",
+    type=int,
+    default=3,
+    help="Maximum number of granules to download (default: 3). Use -1 for all.",
+)
+parser.add_argument(
+    "--bbox",
+    type=float,
+    nargs=4,
+    metavar=("XMIN", "YMIN", "XMAX", "YMAX"),
+    default=DEFAULT_BBOX,
+    help="Bounding box (default: Gulf of Mexico).",
+)
+parser.add_argument(
+    "--short-name",
+    default=SHORT_NAME,
+    help=f"PACE dataset short name (default: {SHORT_NAME}).",
+)
+parser.add_argument(
+    "--version",
+    default="V3_2",
+    help="Only download this processing version (default: V3_2). "
+    "Use 'all' to keep every version.",
+)
+args = parser.parse_args()
+
+# === Authenticate with NASA Earthdata ===
+# Reads credentials from ~/.netrc or EARTHDATA_USERNAME/PASSWORD env vars.
+earthaccess.login(persist=True)
+
+# === Search ===
+print(f"Searching {args.start} to {args.end} over {tuple(args.bbox)} ...")
+granules = hypercoast.search_pace(
+    bbox=tuple(args.bbox),
+    temporal=(args.start, args.end),
+    count=-1,
+    short_name=args.short_name,
+)
+
+# Keep only the requested processing version (e.g. V3_2).
+if args.version.lower() != "all":
+    granules = [
+        g
+        for g in granules
+        if f".{args.version}." in g.get("meta", {}).get("native-id", "")
+    ]
+
+# Trim to the requested count (-1 keeps all).
+if args.count != -1:
+    granules = granules[: args.count]
+
+if not granules:
+    raise RuntimeError(
+        f"No PACE {args.version} granules found over {tuple(args.bbox)} "
+        f"between {args.start} and {args.end}."
+    )
+
+print(f"Found {len(granules)} granule(s):")
+for g in granules:
+    print("  ", g.get("meta", {}).get("native-id", g))
+
+# === Download ===
+files = hypercoast.download_pace(granules, out_dir=DATA_DIR)
+print(f"\nDownloaded {len(files)} file(s) to {DATA_DIR}:")
+for f in files:
+    print("  ", os.path.basename(f))

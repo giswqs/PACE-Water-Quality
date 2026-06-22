@@ -1,0 +1,17 @@
+# Large data and generated products - not committed to git
+data/
+output/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Environments
+.venv/
+venv/
+.env
+
+# OS / editor
+.DS_Store

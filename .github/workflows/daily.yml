@@ -1,0 +1,60 @@
+name: Daily PACE products
+
+# Downloads the latest PACE OCI L2 AOP scene, runs MoE-VAE inference, and
+# publishes the resulting Cloud Optimized GeoTIFFs to the "latest" GitHub
+# release. Runs every day and can also be triggered manually.
+
+on:
+  schedule:
+    - cron: "0 6 * * *" # 06:00 UTC daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: write # needed to create/update releases
+
+concurrency:
+  group: daily-pace
+  cancel-in-progress: false
+
+jobs:
+  process:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only PyTorch (avoids the large CUDA wheels on the runner).
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -r requirements.txt
+
+      - name: Download the latest scene
+        env:
+          EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
+          EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
+        run: python download_latest.py
+
+      - name: Process the latest scene
+        run: python run_folder.py
+
+      - name: List products
+        run: ls -lh output/
+
+      - name: Publish GeoTIFFs to the latest release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view latest >/dev/null 2>&1 || \
+            gh release create latest \
+              --title "Latest PACE water-quality products" \
+              --notes "Cloud Optimized GeoTIFFs (chl-a, TSS, aCDOM) generated automatically from the most recent PACE OCI L2 AOP scene. Updated daily."
+          gh release upload latest output/*.tif --clobber
