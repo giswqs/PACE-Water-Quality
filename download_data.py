@@ -27,8 +27,7 @@ import hypercoast
 
 # Resolve paths relative to this script so it can run from any location.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.join(BASE_DIR, "data")
-os.makedirs(DATA_DIR, exist_ok=True)
+DEFAULT_DATA_DIR = os.path.join(BASE_DIR, "data")
 
 # Default bounding box over the Gulf of Mexico / U.S. Gulf coast, matching the
 # region covered by the bundled test scene. [xmin, ymin, xmax, ymax]
@@ -66,7 +65,14 @@ parser.add_argument(
     help="Only download this processing version (default: V3_2). "
     "Use 'all' to keep every version.",
 )
+parser.add_argument(
+    "--out-dir",
+    default=DEFAULT_DATA_DIR,
+    help="Directory to download into (default: ./data).",
+)
 args = parser.parse_args()
+DATA_DIR = args.out_dir
+os.makedirs(DATA_DIR, exist_ok=True)
 
 # === Authenticate with NASA Earthdata ===
 # Reads credentials from ~/.netrc or EARTHDATA_USERNAME/PASSWORD env vars.
