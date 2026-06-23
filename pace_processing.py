@@ -22,9 +22,8 @@ import pickle
 
 import numpy as np
 import torch
-import xarray as xr
 from rasterio.io import MemoryFile
-from rasterio.transform import from_origin
+from rasterio.transform import from_bounds
 from rio_cogeo.cogeo import cog_translate, cog_validate
 from rio_cogeo.profiles import cog_profiles
 
@@ -286,6 +285,11 @@ def load_models(model_dir, device):
         weights_only=False,
     )
 
+    # eval() mode: disables noisy gating and makes the VAE use the latent
+    # mean (deterministic inference).
+    for mdl in (chla_model, tss_model, acdom_model):
+        mdl.eval()
+
     return {
         "chla": {"model": chla_model},
         "tss": {
@@ -301,120 +305,54 @@ def load_models(model_dir, device):
     }
 
 
-def save_product_to_cog(
-    out_tif,
-    lat_2d,
-    lon_2d,
-    values_2d,
-    resolution=None,
-    nodata=-9999.0,
-    footprint_factor=1.5,
-    fill_gaps=True,
-    max_gap_cells=5,
-):
-    """Grid a PACE swath product onto a regular grid and write a COG.
+def save_product_to_cog(out_tif, lat_2d, lon_2d, values_2d, nodata=-9999.0):
+    """Write a PACE swath product to a COG directly, without interpolation.
 
-    The PACE L2 product is a swath with 2D (curvilinear) latitude/longitude.
-    Following HyperCoast's ``grid_pace`` approach, valid pixels are
-    resampled onto a regular EPSG:4326 grid with nearest-neighbour
-    interpolation (``scipy.interpolate.griddata``), which avoids the
-    moiré/striping that simple binning produces when the target grid is
-    finer than the native pixel spacing. Because the retrieval is a sparse
-    coastal footprint (clear-water pixels between clouds), grid cells whose
-    nearest valid pixel is farther than ``footprint_factor`` cells away are
-    set to nodata so values are not smeared across open water/land.
-
-    With ``fill_gaps`` enabled, interior holes (clouds/flagged pixels/scan
-    gaps that are *enclosed* by valid data) are filled: small gaps are
-    bridged with a morphological closing and fully-enclosed holes are filled,
-    then the nearest-neighbour values are pulled into those cells. The true
-    outer boundary of the footprint is left as nodata, so open ocean/land is
-    not filled. The result is written as a Cloud Optimized GeoTIFF with
-    internal tiling, overviews and DEFLATE compression, then validated.
+    This adopts the upstream ``save_pace_products_to_tif`` approach: the 2D
+    swath array is written straight to a GeoTIFF whose transform spans the
+    swath's lon/lat bounds (``rasterio.transform.from_bounds``). Each pixel
+    keeps its exact model value -- there is no gridding, gap-filling or
+    interpolation, so no synthetic values are introduced; invalid pixels
+    become nodata. The array is flipped if needed so north is up, then
+    written as a Cloud Optimized GeoTIFF (internal tiling, overviews, DEFLATE
+    compression) and validated.
 
     Args:
         out_tif (str): Output GeoTIFF path.
         lat_2d (np.ndarray): 2D latitude array (degrees north, EPSG:4326).
         lon_2d (np.ndarray): 2D longitude array (degrees east, EPSG:4326).
         values_2d (np.ndarray): 2D product values aligned with lat/lon.
-        resolution (float, optional): Grid cell size in degrees. Defaults to
-            the median native pixel spacing (so output ≈ native resolution).
-        nodata (float): Value used for empty cells.
-        footprint_factor (float): Cells farther than this many grid cells
-            from the nearest valid pixel are masked to nodata.
-        fill_gaps (bool): If True, fill interior holes enclosed by data.
-        max_gap_cells (int): Bridge nodata gaps up to roughly this many cells
-            wide before filling enclosed holes.
+        nodata (float): Value used for invalid/empty pixels.
 
     Returns:
         str: The path to the validated COG.
     """
-    from scipy.interpolate import griddata
-    from scipy.spatial import cKDTree
-    from scipy.ndimage import (
-        binary_closing,
-        binary_fill_holes,
-        generate_binary_structure,
-    )
+    lat = np.asarray(lat_2d, dtype=np.float64)
+    lon = np.asarray(lon_2d, dtype=np.float64)
+    data = np.asarray(values_2d, dtype=np.float32)
+    if data.ndim != 2:
+        raise ValueError("values_2d must be a 2D swath array")
 
-    lat = np.asarray(lat_2d, dtype=np.float64).ravel()
-    lon = np.asarray(lon_2d, dtype=np.float64).ravel()
-    val = np.asarray(values_2d, dtype=np.float64).ravel()
+    # Make sure north is up (PACE swaths may be stored south-first).
+    if np.nanmean(lat[0, :]) < np.nanmean(lat[-1, :]):
+        data = data[::-1, :]
+        lat = lat[::-1, :]
+        lon = lon[::-1, :]
 
-    mask = np.isfinite(lat) & np.isfinite(lon) & np.isfinite(val)
-    lat, lon, val = lat[mask], lon[mask], val[mask]
-    if lat.size == 0:
-        raise ValueError(f"No valid pixels to grid for {out_tif}")
+    height, width = data.shape
+    lon_min, lon_max = float(np.nanmin(lon)), float(np.nanmax(lon))
+    lat_min, lat_max = float(np.nanmin(lat)), float(np.nanmax(lat))
+    transform = from_bounds(lon_min, lat_min, lon_max, lat_max, width, height)
 
-    points = np.column_stack([lon, lat])
-
-    # Native pixel spacing from median nearest-neighbour distance.
-    if resolution is None:
-        tree = cKDTree(points)
-        nn = tree.query(points, k=2)[0][:, 1]
-        resolution = float(np.median(nn)) * 1.1
-
-    lon0 = lon.min() - resolution / 2.0
-    lon1 = lon.max() + resolution / 2.0
-    lat0 = lat.min() - resolution / 2.0
-    lat1 = lat.max() + resolution / 2.0
-    ncol = int(np.ceil((lon1 - lon0) / resolution))
-    nrow = int(np.ceil((lat1 - lat0) / resolution))
-    transform = from_origin(lon0, lat1, resolution, resolution)
-
-    # Regular grid cell centres; row 0 = north (lat descending).
-    grid_lon = lon0 + (np.arange(ncol) + 0.5) * resolution
-    grid_lat = lat1 - (np.arange(nrow) + 0.5) * resolution
-    mesh_lon, mesh_lat = np.meshgrid(grid_lon, grid_lat)
-
-    # Nearest-neighbour resampling (HyperCoast grid_pace technique).
-    gridded = griddata(points, val, (mesh_lon, mesh_lat), method="nearest")
-
-    # Mask cells outside the actual data footprint to avoid smearing.
-    tree = cKDTree(points)
-    dist = tree.query(np.column_stack([mesh_lon.ravel(), mesh_lat.ravel()]))[0]
-    dist = dist.reshape(mesh_lon.shape)
-    inside = dist <= resolution * footprint_factor
-
-    # Fill interior holes (clouds/flagged pixels/scan gaps) enclosed by data,
-    # without expanding the true outer boundary into open ocean/land.
-    if fill_gaps:
-        struct = generate_binary_structure(2, 2)  # 8-connectivity
-        coverage = binary_closing(inside, structure=struct, iterations=max_gap_cells)
-        coverage = binary_fill_holes(coverage)
-        # Closing can bleed past the boundary; keep only cells that still have
-        # a nearby valid pixel, plus the newly enclosed interior holes.
-        inside = coverage & (dist <= resolution * (footprint_factor + max_gap_cells))
-
-    grid = np.full((nrow, ncol), nodata, dtype=np.float32)
-    grid[inside] = gridded[inside].astype(np.float32)
+    valid = int(np.isfinite(data).sum())
+    data = np.where(np.isfinite(data), data, nodata).astype(np.float32)
 
     src_profile = dict(
         driver="GTiff",
         dtype="float32",
         count=1,
-        height=nrow,
-        width=ncol,
+        height=height,
+        width=width,
         crs="EPSG:4326",
         transform=transform,
         nodata=nodata,
@@ -422,7 +360,7 @@ def save_product_to_cog(
     dst_profile = cog_profiles.get("deflate")
     with MemoryFile() as mem:
         with mem.open(**src_profile) as src:
-            src.write(grid, 1)
+            src.write(data, 1)
         with mem.open() as src:
             cog_translate(
                 src,
@@ -432,12 +370,9 @@ def save_product_to_cog(
                 quiet=True,
             )
 
-    valid, errors, warnings = cog_validate(out_tif)
-    status = "valid" if valid else "INVALID"
-    print(
-        f"COG {status}: {out_tif} "
-        f"({int(inside.sum())} cells @ {resolution:.4f} deg)"
-    )
+    is_valid, errors, warnings = cog_validate(out_tif)
+    status = "valid" if is_valid else "INVALID"
+    print(f"COG {status}: {out_tif} ({valid} valid pixels)")
     if errors:
         print("  errors:", errors)
     if warnings:
@@ -464,22 +399,23 @@ def parse_acquisition_date(nc_path):
     return match.group(1)
 
 
-def process_scene(nc_path, models, save_dir, keep_nc=False):
-    """Run inference on one PACE scene and write the NetCDF + COG products.
+def infer_scene_maps(nc_path, models):
+    """Run inference on one PACE scene and return the product maps in memory.
+
+    No files are written. The per-pixel model outputs are reshaped to the
+    scene's native swath grid so they can be written directly to GeoTIFFs
+    (no gridding/interpolation).
 
     Args:
         nc_path (str): Path to the input PACE L2 AOP NetCDF file.
         models (dict): Loaded models/scalers from :func:`load_models`.
-        save_dir (str): Directory to write the products into.
-        keep_nc (bool): If False (default), the intermediate products NetCDF
-            is deleted once the GeoTIFFs are written. The COGs are the
-            deliverable, so this avoids accumulating large NetCDF files.
 
     Returns:
-        list[str]: Paths to the written COG files.
+        dict: ``{"latitude", "longitude", "chla", "tss", "acdom440",
+            "valid"}`` where the first five are 2D arrays and ``valid`` is the
+            number of valid (finite) retrieval pixels.
     """
-    os.makedirs(save_dir, exist_ok=True)
-    print(f"Processing scene: {nc_path}")
+    import hypercoast
 
     chla_output = preprocess_infer_pace_minmax(
         nc_path=nc_path,
@@ -489,7 +425,6 @@ def process_scene(nc_path, models, save_dir, keep_nc=False):
         batch_size=2048,
         log_offset=1,
     )
-
     tss_output = preprocess_infer_pace_robust(
         nc_path=nc_path,
         model=models["tss"]["model"],
@@ -500,7 +435,6 @@ def process_scene(nc_path, models, save_dir, keep_nc=False):
         use_spectral_mask=True,
         batch_size=2048,
     )
-
     acdom_output = preprocess_infer_pace_robust(
         nc_path=nc_path,
         model=models["acdom"]["model"],
@@ -512,32 +446,61 @@ def process_scene(nc_path, models, save_dir, keep_nc=False):
         batch_size=2048,
     )
 
-    products_nc = save_pace_products_to_nc(
-        nc_path=nc_path,
-        save_dir=save_dir,
-        chla_output=chla_output,
-        tss_output=tss_output,
-        acdom_output=acdom_output,
-    )
+    da = hypercoast.read_pace(nc_path)["Rrs"]
+    lat = da.latitude.values
+    lon = da.longitude.values
+    shape = lat.shape
 
-    acq_date = parse_acquisition_date(nc_path)
-    cog_paths = []
-    products_ds = xr.open_dataset(products_nc)
-    lat_2d = products_ds["latitude"].values
-    lon_2d = products_ds["longitude"].values
+    chla = chla_output[:, 2].reshape(shape).astype(np.float32)
+    tss = tss_output[:, 2].reshape(shape).astype(np.float32)
+    acdom = acdom_output[:, 2].reshape(shape).astype(np.float32)
+
+    return {
+        "latitude": lat,
+        "longitude": lon,
+        "chla": chla,
+        "tss": tss,
+        "acdom440": acdom,
+        "valid": int(np.isfinite(chla).sum()),
+    }
+
+
+def write_scene_cogs(maps, save_dir, date):
+    """Write the in-memory product maps to date-named direct COGs.
+
+    Args:
+        maps (dict): Output of :func:`infer_scene_maps`.
+        save_dir (str): Output directory.
+        date (str): Acquisition date (YYYYMMDD) used in the filename.
+
+    Returns:
+        list[str]: Paths to the written COGs.
+    """
+    os.makedirs(save_dir, exist_ok=True)
+    paths = []
     for var, label in PRODUCT_LABELS.items():
-        cog_paths.append(
+        paths.append(
             save_product_to_cog(
-                out_tif=os.path.join(save_dir, f"PACE_OCI-{acq_date}-{label}.tif"),
-                lat_2d=lat_2d,
-                lon_2d=lon_2d,
-                values_2d=products_ds[var].values,
+                out_tif=os.path.join(save_dir, f"PACE_OCI-{date}-{label}.tif"),
+                lat_2d=maps["latitude"],
+                lon_2d=maps["longitude"],
+                values_2d=maps[var],
             )
         )
-    products_ds.close()
+    return paths
 
-    # The COGs are the deliverable; drop the intermediate NetCDF to save space.
-    if not keep_nc and os.path.exists(products_nc):
-        os.remove(products_nc)
 
-    return cog_paths
+def process_scene(nc_path, models, save_dir):
+    """Run inference on one PACE scene and write direct (no-interp) COGs.
+
+    Args:
+        nc_path (str): Path to the input PACE L2 AOP NetCDF file.
+        models (dict): Loaded models/scalers from :func:`load_models`.
+        save_dir (str): Directory to write the products into.
+
+    Returns:
+        list[str]: Paths to the written COG files.
+    """
+    print(f"Processing scene: {nc_path}")
+    maps = infer_scene_maps(nc_path, models)
+    return write_scene_cogs(maps, save_dir, parse_acquisition_date(nc_path))

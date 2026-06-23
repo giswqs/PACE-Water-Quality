@@ -86,24 +86,29 @@ failures (reporting them in a summary).
 ## Outputs
 
 For an input named `PACE_OCI.<YYYYMMDD>T<HHMMSS>.L2.OC_AOP.<ver>.nc`, the
-`output/` folder receives:
+`output/` folder receives one date-named COG per product:
 
-- `PACE_OCI.<...>_products.nc` — all three products on the native swath grid
 - `PACE_OCI-<YYYYMMDD>-chla.tif`
 - `PACE_OCI-<YYYYMMDD>-tss.tif`
 - `PACE_OCI-<YYYYMMDD>-acdom.tif`
 
-The date in the COG filenames is parsed from the input filename.
+The date is parsed from the input filename. When several PACE passes share a
+date, the pass with the most valid retrieval pixels is kept (best pass per
+day).
 
 ### About the COGs
 
-PACE L2 is swath data with 2D (curvilinear) lat/lon. Each product is
-resampled onto a regular EPSG:4326 grid at ~native resolution (~1 km) using
-nearest-neighbour interpolation (HyperCoast's `grid_pace` technique), with
-cells outside the actual data footprint masked to nodata so values are not
-smeared across open water. Each GeoTIFF is written with internal tiling
-(512×512), overviews, and DEFLATE compression, then validated with
-`rio_cogeo`.
+PACE L2 is swath data with 2D (curvilinear) lat/lon. Each product is written
+**directly** from the swath array to a GeoTIFF whose transform spans the
+swath's lon/lat bounds (`rasterio.transform.from_bounds`) — every pixel keeps
+its exact model value, with **no gridding, gap-filling or interpolation**, so
+no synthetic values are introduced (invalid pixels are nodata). Each GeoTIFF
+is written with internal tiling, overviews and DEFLATE compression, then
+validated with `rio_cogeo`.
+
+Inference is deterministic: the models run in `eval()` mode, which disables
+the MoE noisy gating and makes the VAE use its latent mean, so re-running a
+scene reproduces the same products.
 
 ## Automated daily products
 

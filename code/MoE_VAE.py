@@ -83,6 +83,10 @@ class VAE(LightningModule):
         return mu, log_var
 
     def reparameterize(self, mu, log_var):
+        # At inference (eval mode) use the latent mean so results are
+        # deterministic/reproducible; only sample during training.
+        if not self.training:
+            return mu
         std = torch.exp(0.5 * log_var)
         eps = torch.randn_like(std)
         z = mu + eps * std

@@ -1,15 +1,15 @@
-"""Process every PACE L2 AOP scene in a folder into water-quality products.
+"""Process PACE L2 AOP scenes in a folder into daily water-quality COGs.
 
-Loads the MoE-VAE models once and runs inference on each PACE NetCDF file in
-the input folder, writing the products NetCDF plus validated Cloud Optimized
-GeoTIFFs (chl-a, TSS, aCDOM) to the output folder. Scenes that fail are
-reported and skipped so one bad file does not abort the whole batch.
+For each acquisition date, every PACE pass in the folder is run through the
+models and the pass with the most valid retrieval pixels is kept, written as
+date-named Cloud Optimized GeoTIFFs (chl-a, TSS, aCDOM) in the output folder.
+Products are written directly from the swath (no gridding/interpolation), so
+each pixel keeps its exact model value.
 
 Examples::
 
     python run_folder.py                       # process ./data -> ./output
-    python run_folder.py /path/to/scenes
-    python run_folder.py data --output results --pattern "PACE_OCI.*V3_2.nc"
+    python run_folder.py /media/hdd/Data/PACE/data --output /media/hdd/Data/PACE/output
 
 To process a single file, use ``run_file.py``.
 """
@@ -17,13 +17,21 @@ To process a single file, use ``run_file.py``.
 import os
 import glob
 import argparse
+from collections import defaultdict
 
 import torch
 
-from pace_processing import BASE_DIR, load_models, process_scene
+from pace_processing import (
+    BASE_DIR,
+    load_models,
+    infer_scene_maps,
+    write_scene_cogs,
+    parse_acquisition_date,
+)
 
 parser = argparse.ArgumentParser(
-    description="Process every PACE L2 AOP scene in a folder."
+    description="Process PACE scenes in a folder into daily water-quality COGs "
+    "(best pass per day)."
 )
 parser.add_argument(
     "folder",
@@ -51,33 +59,47 @@ args = parser.parse_args()
 if not os.path.isdir(args.folder):
     raise NotADirectoryError(f"Input folder not found: {args.folder}")
 
-# Match the pattern but never treat already-written products as input.
-scenes = sorted(
-    f
-    for f in glob.glob(os.path.join(args.folder, args.pattern))
-    if not f.endswith("_products.nc")
-)
-if not scenes:
+# Group input scenes by acquisition date (skip any products files).
+by_date = defaultdict(list)
+for path in sorted(glob.glob(os.path.join(args.folder, args.pattern))):
+    if path.endswith("_products.nc"):
+        continue
+    by_date[parse_acquisition_date(path)].append(path)
+
+if not by_date:
     raise FileNotFoundError(
         f"No files matching '{args.pattern}' found in {args.folder}"
     )
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
-print(f"Found {len(scenes)} scene(s) in {args.folder}")
+n_scenes = sum(len(v) for v in by_date.values())
+print(f"Found {n_scenes} scene(s) across {len(by_date)} date(s) in {args.folder}")
 
 models = load_models(args.model_dir, device)
 
 succeeded, failed = [], []
-for i, nc_path in enumerate(scenes, 1):
-    print(f"\n[{i}/{len(scenes)}] {os.path.basename(nc_path)}")
-    try:
-        process_scene(nc_path, models, args.output)
-        succeeded.append(nc_path)
-    except Exception as exc:  # noqa: BLE001 - keep batch going on failure
-        print(f"  FAILED: {exc}")
-        failed.append((nc_path, exc))
+for date in sorted(by_date):
+    passes = by_date[date]
+    print(f"\n[{date}] {len(passes)} pass(es)")
+    best_maps, best_pass = None, None
+    for nc_path in passes:
+        try:
+            maps = infer_scene_maps(nc_path, models)
+        except Exception as exc:  # noqa: BLE001 - keep batch going on failure
+            print(f"  FAILED {os.path.basename(nc_path)}: {exc}")
+            failed.append((nc_path, exc))
+            continue
+        print(f"  {os.path.basename(nc_path)}: {maps['valid']} valid pixels")
+        if best_maps is None or maps["valid"] > best_maps["valid"]:
+            best_maps, best_pass = maps, nc_path
 
-print(f"\nDone. {len(succeeded)} succeeded, {len(failed)} failed.")
+    if best_maps is None:
+        continue
+    print(f"  -> best: {os.path.basename(best_pass)} ({best_maps['valid']} px)")
+    write_scene_cogs(best_maps, args.output, date)
+    succeeded.append(date)
+
+print(f"\nDone. {len(succeeded)} date(s) written, {len(failed)} pass(es) failed.")
 for nc_path, exc in failed:
     print(f"  - {os.path.basename(nc_path)}: {exc}")
