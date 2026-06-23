@@ -310,71 +310,66 @@ def save_product_to_cog(
     lat_2d,
     lon_2d,
     values_2d,
-    resolution=None,
-    res_factor=1.5,
+    resolution_m=1000,
+    method="linear",
     nodata=-9999.0,
 ):
-    """Bin a PACE swath product onto a regular grid and write a COG.
+    """Grid a PACE swath product onto a regular grid and write a COG.
 
-    PACE L2 swaths are rotated and curved in lon/lat, so the array's
-    (row, col) layout is *not* axis-aligned and cannot be written to a
-    GeoTIFF directly. Each valid pixel is instead placed in the regular
-    EPSG:4326 grid cell that contains its true (lon, lat) -- correct
-    georeferencing. Cells receiving several pixels are averaged; cells with
-    no pixel stay nodata. There is **no interpolation, gap-filling or
-    smearing** -- empty areas (clouds/land) remain nodata and no synthetic
-    values are introduced. The result is written as a Cloud Optimized
-    GeoTIFF (internal tiling, overviews, DEFLATE compression) and validated.
+    PACE L2 swaths are rotated/curved in lon/lat, so the array's (row, col)
+    layout is not axis-aligned and cannot be written to a GeoTIFF directly.
+    Each pixel is gridded at its true (lon, lat) onto a regular EPSG:4326 grid
+    with ``scipy.interpolate.griddata`` (the upstream ``npy_to_tif``
+    approach). This georeferences correctly and the linear interpolation
+    fills the thin rotated-scan gaps for a continuous coastal field, while
+    leaving open ocean / large cloud gaps as nodata (outside the data hull).
+    The result is written as a Cloud Optimized GeoTIFF (internal tiling,
+    overviews, DEFLATE compression) and validated.
 
     Args:
         out_tif (str): Output GeoTIFF path.
         lat_2d (np.ndarray): Latitude (degrees north, EPSG:4326).
         lon_2d (np.ndarray): Longitude (degrees east, EPSG:4326).
-        values_2d (np.ndarray): Product values aligned with lat/lon.
-        resolution (float, optional): Grid cell size in degrees. Defaults to
-            ``res_factor`` x the median native pixel spacing.
-        res_factor (float): Multiplier on the native spacing used when
-            ``resolution`` is None. >1 avoids nodata striping from the
-            rotated scan geometry while keeping ~native resolution.
+        values_2d (np.ndarray): Product values aligned with lat/lon (NaN for
+            invalid pixels).
+        resolution_m (float): Target grid resolution in metres (default 1000,
+            ~0.01 deg, matching the reference products).
+        method (str): ``griddata`` interpolation method (default "linear").
         nodata (float): Value used for empty cells.
 
     Returns:
         str: The path to the validated COG.
     """
-    from scipy.spatial import cKDTree
+    from scipy.interpolate import griddata
 
     lat = np.asarray(lat_2d, dtype=np.float64).ravel()
     lon = np.asarray(lon_2d, dtype=np.float64).ravel()
     val = np.asarray(values_2d, dtype=np.float64).ravel()
 
-    mask = np.isfinite(lat) & np.isfinite(lon) & np.isfinite(val)
-    lat, lon, val = lat[mask], lon[mask], val[mask]
-    if lat.size == 0:
+    geo_ok = np.isfinite(lat) & np.isfinite(lon)
+    if not (geo_ok & np.isfinite(val)).any():
         raise ValueError(f"No valid pixels to grid for {out_tif}")
+    lat, lon, val = lat[geo_ok], lon[geo_ok], val[geo_ok]
 
-    # Native pixel spacing from the median nearest-neighbour distance.
-    if resolution is None:
-        pts = np.column_stack([lon, lat])
-        nn = cKDTree(pts).query(pts, k=2)[0][:, 1]
-        resolution = float(np.median(nn)) * res_factor
+    # Regular grid spanning the swath extent; metres -> degrees at scene centre.
+    lat_min, lat_max = float(np.nanmin(lat)), float(np.nanmax(lat))
+    lon_min, lon_max = float(np.nanmin(lon)), float(np.nanmax(lon))
+    lat_c = (lat_min + lat_max) / 2.0
+    res_lat = resolution_m / 111000.0
+    res_lon = resolution_m / (111000.0 * np.cos(np.radians(lat_c)))
+    lon_axis = np.arange(lon_min, lon_max + res_lon, res_lon)
+    lat_axis = np.arange(lat_min, lat_max + res_lat, res_lat)
+    mesh_lon, mesh_lat = np.meshgrid(lon_axis, lat_axis)
+    transform = from_origin(lon_axis.min(), lat_axis.max(), res_lon, res_lat)
 
-    lon0 = lon.min() - resolution / 2.0
-    lat1 = lat.max() + resolution / 2.0
-    ncol = int(np.ceil((lon.max() + resolution / 2.0 - lon0) / resolution))
-    nrow = int(np.ceil((lat1 - (lat.min() - resolution / 2.0)) / resolution))
-    transform = from_origin(lon0, lat1, resolution, resolution)
+    # Grid by true (lon, lat); NaN-valued pixels keep gaps where there is no
+    # data (interpolation does not cross them).
+    grid = griddata((lon, lat), val, (mesh_lon, mesh_lat), method=method)
+    grid = np.flipud(grid).astype(np.float32)
+    filled = np.isfinite(grid)
+    grid[~filled] = nodata
 
-    # Place each pixel in the cell containing its (lon, lat); average dupes.
-    col = np.clip(((lon - lon0) / resolution).astype(int), 0, ncol - 1)
-    row = np.clip(((lat1 - lat) / resolution).astype(int), 0, nrow - 1)
-    acc = np.zeros((nrow, ncol), dtype=np.float64)
-    cnt = np.zeros((nrow, ncol), dtype=np.float64)
-    np.add.at(acc, (row, col), val)
-    np.add.at(cnt, (row, col), 1.0)
-    filled = cnt > 0
-    grid = np.full((nrow, ncol), nodata, dtype=np.float32)
-    grid[filled] = (acc[filled] / cnt[filled]).astype(np.float32)
-
+    nrow, ncol = grid.shape
     src_profile = dict(
         driver="GTiff",
         dtype="float32",
@@ -402,7 +397,7 @@ def save_product_to_cog(
     status = "valid" if is_valid else "INVALID"
     print(
         f"COG {status}: {out_tif} "
-        f"({int(filled.sum())} cells @ {resolution:.4f} deg)"
+        f"({int(filled.sum())} cells @ {res_lon:.4f}x{res_lat:.4f} deg)"
     )
     if errors:
         print("  errors:", errors)

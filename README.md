@@ -100,14 +100,14 @@ day).
 
 PACE L2 swaths are rotated/curved in lon/lat, so the array's `(row, col)`
 layout is not axis-aligned and cannot be written to a GeoTIFF directly
-(`from_bounds` on the raw array mis-georeferences it). Instead, each valid
-pixel is **binned** into the regular EPSG:4326 grid cell that contains its
-true `(lon, lat)` — correct georeferencing. Cells with several pixels are
-averaged; cells with no pixel stay nodata. There is **no interpolation,
-gap-filling or smearing** — empty areas (clouds/land) remain nodata and no
-synthetic values are introduced. Grid resolution defaults to ~1.5× the native
-pixel spacing. Each GeoTIFF is written with internal tiling, overviews and
-DEFLATE compression, then validated with `rio_cogeo`.
+(`from_bounds` on the raw array mis-georeferences it). Instead each product is
+gridded at its true `(lon, lat)` onto a regular EPSG:4326 grid (~1 km, 0.01°)
+with `scipy.interpolate.griddata` — the upstream `npy_to_tif` approach. This
+georeferences correctly and the interpolation fills the thin rotated-scan
+gaps for a continuous coastal field, while leaving the open ocean / large
+cloud gaps outside the data hull as nodata. Each GeoTIFF is written with
+internal tiling, overviews and DEFLATE compression, then validated with
+`rio_cogeo`.
 
 Inference is deterministic: the models run in `eval()` mode, which disables
 the MoE noisy gating and makes the VAE use its latent mean, so re-running a
