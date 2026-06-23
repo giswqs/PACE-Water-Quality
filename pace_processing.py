@@ -23,7 +23,7 @@ import pickle
 import numpy as np
 import torch
 from rasterio.io import MemoryFile
-from rasterio.transform import from_bounds
+from rasterio.transform import from_origin
 from rio_cogeo.cogeo import cog_translate, cog_validate
 from rio_cogeo.profiles import cog_profiles
 
@@ -305,54 +305,82 @@ def load_models(model_dir, device):
     }
 
 
-def save_product_to_cog(out_tif, lat_2d, lon_2d, values_2d, nodata=-9999.0):
-    """Write a PACE swath product to a COG directly, without interpolation.
+def save_product_to_cog(
+    out_tif,
+    lat_2d,
+    lon_2d,
+    values_2d,
+    resolution=None,
+    res_factor=1.5,
+    nodata=-9999.0,
+):
+    """Bin a PACE swath product onto a regular grid and write a COG.
 
-    This adopts the upstream ``save_pace_products_to_tif`` approach: the 2D
-    swath array is written straight to a GeoTIFF whose transform spans the
-    swath's lon/lat bounds (``rasterio.transform.from_bounds``). Each pixel
-    keeps its exact model value -- there is no gridding, gap-filling or
-    interpolation, so no synthetic values are introduced; invalid pixels
-    become nodata. The array is flipped if needed so north is up, then
-    written as a Cloud Optimized GeoTIFF (internal tiling, overviews, DEFLATE
-    compression) and validated.
+    PACE L2 swaths are rotated and curved in lon/lat, so the array's
+    (row, col) layout is *not* axis-aligned and cannot be written to a
+    GeoTIFF directly. Each valid pixel is instead placed in the regular
+    EPSG:4326 grid cell that contains its true (lon, lat) -- correct
+    georeferencing. Cells receiving several pixels are averaged; cells with
+    no pixel stay nodata. There is **no interpolation, gap-filling or
+    smearing** -- empty areas (clouds/land) remain nodata and no synthetic
+    values are introduced. The result is written as a Cloud Optimized
+    GeoTIFF (internal tiling, overviews, DEFLATE compression) and validated.
 
     Args:
         out_tif (str): Output GeoTIFF path.
-        lat_2d (np.ndarray): 2D latitude array (degrees north, EPSG:4326).
-        lon_2d (np.ndarray): 2D longitude array (degrees east, EPSG:4326).
-        values_2d (np.ndarray): 2D product values aligned with lat/lon.
-        nodata (float): Value used for invalid/empty pixels.
+        lat_2d (np.ndarray): Latitude (degrees north, EPSG:4326).
+        lon_2d (np.ndarray): Longitude (degrees east, EPSG:4326).
+        values_2d (np.ndarray): Product values aligned with lat/lon.
+        resolution (float, optional): Grid cell size in degrees. Defaults to
+            ``res_factor`` x the median native pixel spacing.
+        res_factor (float): Multiplier on the native spacing used when
+            ``resolution`` is None. >1 avoids nodata striping from the
+            rotated scan geometry while keeping ~native resolution.
+        nodata (float): Value used for empty cells.
 
     Returns:
         str: The path to the validated COG.
     """
-    lat = np.asarray(lat_2d, dtype=np.float64)
-    lon = np.asarray(lon_2d, dtype=np.float64)
-    data = np.asarray(values_2d, dtype=np.float32)
-    if data.ndim != 2:
-        raise ValueError("values_2d must be a 2D swath array")
+    from scipy.spatial import cKDTree
 
-    # Make sure north is up (PACE swaths may be stored south-first).
-    if np.nanmean(lat[0, :]) < np.nanmean(lat[-1, :]):
-        data = data[::-1, :]
-        lat = lat[::-1, :]
-        lon = lon[::-1, :]
+    lat = np.asarray(lat_2d, dtype=np.float64).ravel()
+    lon = np.asarray(lon_2d, dtype=np.float64).ravel()
+    val = np.asarray(values_2d, dtype=np.float64).ravel()
 
-    height, width = data.shape
-    lon_min, lon_max = float(np.nanmin(lon)), float(np.nanmax(lon))
-    lat_min, lat_max = float(np.nanmin(lat)), float(np.nanmax(lat))
-    transform = from_bounds(lon_min, lat_min, lon_max, lat_max, width, height)
+    mask = np.isfinite(lat) & np.isfinite(lon) & np.isfinite(val)
+    lat, lon, val = lat[mask], lon[mask], val[mask]
+    if lat.size == 0:
+        raise ValueError(f"No valid pixels to grid for {out_tif}")
 
-    valid = int(np.isfinite(data).sum())
-    data = np.where(np.isfinite(data), data, nodata).astype(np.float32)
+    # Native pixel spacing from the median nearest-neighbour distance.
+    if resolution is None:
+        pts = np.column_stack([lon, lat])
+        nn = cKDTree(pts).query(pts, k=2)[0][:, 1]
+        resolution = float(np.median(nn)) * res_factor
+
+    lon0 = lon.min() - resolution / 2.0
+    lat1 = lat.max() + resolution / 2.0
+    ncol = int(np.ceil((lon.max() + resolution / 2.0 - lon0) / resolution))
+    nrow = int(np.ceil((lat1 - (lat.min() - resolution / 2.0)) / resolution))
+    transform = from_origin(lon0, lat1, resolution, resolution)
+
+    # Place each pixel in the cell containing its (lon, lat); average dupes.
+    col = np.clip(((lon - lon0) / resolution).astype(int), 0, ncol - 1)
+    row = np.clip(((lat1 - lat) / resolution).astype(int), 0, nrow - 1)
+    acc = np.zeros((nrow, ncol), dtype=np.float64)
+    cnt = np.zeros((nrow, ncol), dtype=np.float64)
+    np.add.at(acc, (row, col), val)
+    np.add.at(cnt, (row, col), 1.0)
+    filled = cnt > 0
+    grid = np.full((nrow, ncol), nodata, dtype=np.float32)
+    grid[filled] = (acc[filled] / cnt[filled]).astype(np.float32)
 
     src_profile = dict(
         driver="GTiff",
         dtype="float32",
         count=1,
-        height=height,
-        width=width,
+        height=nrow,
+        width=ncol,
         crs="EPSG:4326",
         transform=transform,
         nodata=nodata,
@@ -360,7 +388,7 @@ def save_product_to_cog(out_tif, lat_2d, lon_2d, values_2d, nodata=-9999.0):
     dst_profile = cog_profiles.get("deflate")
     with MemoryFile() as mem:
         with mem.open(**src_profile) as src:
-            src.write(data, 1)
+            src.write(grid, 1)
         with mem.open() as src:
             cog_translate(
                 src,
@@ -372,7 +400,10 @@ def save_product_to_cog(out_tif, lat_2d, lon_2d, values_2d, nodata=-9999.0):
 
     is_valid, errors, warnings = cog_validate(out_tif)
     status = "valid" if is_valid else "INVALID"
-    print(f"COG {status}: {out_tif} ({valid} valid pixels)")
+    print(
+        f"COG {status}: {out_tif} "
+        f"({int(filled.sum())} cells @ {resolution:.4f} deg)"
+    )
     if errors:
         print("  errors:", errors)
     if warnings:

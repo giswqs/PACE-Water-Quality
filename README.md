@@ -98,13 +98,16 @@ day).
 
 ### About the COGs
 
-PACE L2 is swath data with 2D (curvilinear) lat/lon. Each product is written
-**directly** from the swath array to a GeoTIFF whose transform spans the
-swath's lon/lat bounds (`rasterio.transform.from_bounds`) — every pixel keeps
-its exact model value, with **no gridding, gap-filling or interpolation**, so
-no synthetic values are introduced (invalid pixels are nodata). Each GeoTIFF
-is written with internal tiling, overviews and DEFLATE compression, then
-validated with `rio_cogeo`.
+PACE L2 swaths are rotated/curved in lon/lat, so the array's `(row, col)`
+layout is not axis-aligned and cannot be written to a GeoTIFF directly
+(`from_bounds` on the raw array mis-georeferences it). Instead, each valid
+pixel is **binned** into the regular EPSG:4326 grid cell that contains its
+true `(lon, lat)` — correct georeferencing. Cells with several pixels are
+averaged; cells with no pixel stay nodata. There is **no interpolation,
+gap-filling or smearing** — empty areas (clouds/land) remain nodata and no
+synthetic values are introduced. Grid resolution defaults to ~1.5× the native
+pixel spacing. Each GeoTIFF is written with internal tiling, overviews and
+DEFLATE compression, then validated with `rio_cogeo`.
 
 Inference is deterministic: the models run in `eval()` mode, which disables
 the MoE noisy gating and makes the VAE use its latent mean, so re-running a
