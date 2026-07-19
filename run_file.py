@@ -1,8 +1,12 @@
 """Process a single PACE L2 AOP scene into water-quality products.
 
-Runs MoE-VAE inference on one PACE NetCDF file and writes the products
-NetCDF plus validated Cloud Optimized GeoTIFFs (chl-a, TSS, aCDOM) to the
-local ``output`` folder.
+Runs MoE-VAE inference on one PACE NetCDF file and writes one validated
+Cloud Optimized GeoTIFF per product to the local ``output`` folder. Each COG
+keeps the granule name of the input and goes in a per-product subfolder::
+
+    output/chla/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+    output/tss/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+    output/acdom/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
 
 Examples::
 

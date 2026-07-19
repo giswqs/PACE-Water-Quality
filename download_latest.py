@@ -1,10 +1,12 @@
-"""Download the latest PACE OCI L2 AOP scene(s) for testing the workflow.
+"""Download every PACE OCI L2 AOP pass from the most recent available date(s).
 
 Uses HyperCoast's ``search_pace`` / ``download_pace`` (which wrap NASA
-``earthaccess``) to fetch the most recent granule(s) over a region of
-interest into the local ``data`` folder. The granules match the same
+``earthaccess``) to fetch granules over a region of interest into the local
+``data`` folder. All passes from the most recent ``NUM_DATES`` acquisition
+dates are downloaded — PACE often crosses the region several times a day and
+every pass is processed into its own products. The granules match the same
 product type as the bundled test scene (``PACE_OCI.*.L2.OC_AOP.*.nc``), so
-they can be fed straight into ``run.py``.
+they can be fed straight into ``run_folder.py``.
 
 For downloading scenes over a specific date range instead, use
 ``download_data.py``.
@@ -32,7 +34,7 @@ os.makedirs(DATA_DIR, exist_ok=True)
 BBOX = (-98.0, 18.0, -80.0, 31.0)
 SHORT_NAME = "PACE_OCI_L2_AOP"  # surface reflectance (Rrs) product
 VERSION = "V3_2"  # only download this processing version (None keeps all)
-NUM_SCENES = 1  # number of most-recent scenes to download
+NUM_DATES = 1  # number of most-recent acquisition dates to download (all passes)
 # Look-back windows (days) tried in order until granules are found. PACE
 # standard products can lag the present by days/weeks, so widen if needed.
 LOOKBACK_DAYS = (7, 30, 90, 365)
@@ -86,7 +88,8 @@ if not granules:
         f"last {LOOKBACK_DAYS[-1]} days."
     )
 
-# Keep the newest version per acquisition time, then take the latest scenes.
+# Keep the newest version per acquisition time, then keep every pass that
+# falls on one of the most recent acquisition dates.
 by_time = {}
 for g in granules:
     t = acquisition_time(g)
@@ -96,9 +99,10 @@ for g in granules:
     ):
         by_time[t] = g
 
-latest = [by_time[t] for t in sorted(by_time, reverse=True)][:NUM_SCENES]
+latest_dates = sorted({t[:8] for t in by_time}, reverse=True)[:NUM_DATES]
+latest = [by_time[t] for t in sorted(by_time, reverse=True) if t[:8] in latest_dates]
 
-print(f"\nLatest {len(latest)} scene(s):")
+print(f"\n{len(latest)} pass(es) from {', '.join(latest_dates)}:")
 for g in latest:
     print("  ", g["meta"]["native-id"])
 

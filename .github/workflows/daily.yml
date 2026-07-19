@@ -1,8 +1,9 @@
 name: Daily PACE products
 
-# Downloads the latest PACE OCI L2 AOP scene, runs MoE-VAE inference, and
-# publishes the resulting Cloud Optimized GeoTIFFs to the "latest" GitHub
-# release. Runs every day and can also be triggered manually.
+# Downloads every PACE OCI L2 AOP pass from the most recent available date,
+# runs MoE-VAE inference, and publishes the resulting Cloud Optimized
+# GeoTIFFs and per-date JSON catalogs to the Hugging Face dataset. Runs every
+# day and can also be triggered manually.
 
 on:
   schedule:
@@ -10,7 +11,7 @@ on:
   workflow_dispatch: {}
 
 permissions:
-  contents: write # needed to create/update releases
+  contents: read # products are published to Hugging Face, not to git
 
 concurrency:
   group: daily-pace
@@ -37,29 +38,21 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -r requirements.txt
 
-      - name: Download the latest scene
+      - name: Download every pass from the latest available date
         env:
           EARTHDATA_USERNAME: ${{ secrets.EARTHDATA_USERNAME }}
           EARTHDATA_PASSWORD: ${{ secrets.EARTHDATA_PASSWORD }}
         run: python download_latest.py
 
-      - name: Process the latest scene
-        run: python run_folder.py
+      - name: Process the scenes
+        run: python run_folder.py --json-dir json
 
       - name: List products
-        run: ls -lh output/
-
-      - name: Publish GeoTIFFs to the PACE-Data release
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          gh release view PACE-Data >/dev/null 2>&1 || \
-            gh release create PACE-Data \
-              --title "PACE-Data" \
-              --notes "Cloud Optimized GeoTIFFs (chl-a, TSS, aCDOM) generated automatically from PACE OCI L2 AOP scenes. Updated daily; products from each acquisition date accumulate here."
-          gh release upload PACE-Data output/*.tif --clobber
+          find output -name '*.tif' | sort
+          ls -lh json/
 
-      - name: Publish GeoTIFFs to the Hugging Face dataset
+      - name: Publish COGs and JSON catalogs to the Hugging Face dataset
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
@@ -70,13 +63,22 @@ jobs:
           repo_id = "giswqs/PACE-Water-Quality"
           api = HfApi(token=os.environ["HF_TOKEN"])
           api.create_repo(repo_id, repo_type="dataset", exist_ok=True)
+          # COGs go to data/<product>/<granule>.tif, catalogs to json/.
           api.upload_folder(
               folder_path="output",
-              path_in_repo="cogs",
+              path_in_repo="data",
               repo_id=repo_id,
               repo_type="dataset",
               allow_patterns=["*.tif"],
               commit_message="Add daily PACE water-quality products",
           )
-          print("Uploaded GeoTIFFs to", f"https://huggingface.co/datasets/{repo_id}")
+          api.upload_folder(
+              folder_path="json",
+              path_in_repo="json",
+              repo_id=repo_id,
+              repo_type="dataset",
+              allow_patterns=["*.json"],
+              commit_message="Update per-date PACE catalogs",
+          )
+          print("Uploaded to", f"https://huggingface.co/datasets/{repo_id}")
           PY
