@@ -16,15 +16,17 @@ GeoTIFFs (COGs):
 
 ```
 PACE_PRODUCT/
-├── code/                  # MoE-VAE model + PACE inference/IO helpers
+├── moe_vae/               # MoE-VAE model + PACE inference/IO helpers
 ├── model/                 # Trained weights & scalers (chl-a / tss / acdom)
 ├── data/                  # Input PACE L2 AOP NetCDF scenes
 ├── output/                # Generated products (NetCDF + COGs)
+├── json/                  # Per-date GeoJSON catalogs of the published COGs
 ├── download_data.py       # Download scenes over a specified date range
-├── download_latest.py     # Download the most recent scene
+├── download_latest.py     # Download every pass from the most recent date
 ├── pace_processing.py     # Shared logic: load_models / process_scene / COG
 ├── run_file.py            # Process a single scene
 ├── run_folder.py          # Process every scene in a folder
+├── make_json.py           # Build the per-date JSON catalogs from the COGs
 ├── run.py                 # Original single-scene script (self-contained)
 ├── requirements.txt
 └── README.md
@@ -54,7 +56,7 @@ machine urs.earthdata.nasa.gov login YOUR_USERNAME password YOUR_PASSWORD
 ### 1. Download data
 
 ```bash
-# Latest available scene over the region of interest
+# Every pass from the most recent available date over the region of interest
 python download_latest.py
 
 # Scenes over a specific date range (Gulf of Mexico by default)
@@ -77,24 +79,61 @@ python run_file.py data/PACE_OCI.20240701T175112.L2.OC_AOP.V3_1.nc
 # Every scene in a folder (defaults to data/ -> output/)
 python run_folder.py
 python run_folder.py data --output results --pattern "PACE_OCI.*V3_2.nc"
+
+# Process and build the per-date JSON catalogs in one go
+python run_folder.py --json-dir json
 ```
 
 Both accept `--output` and `--model-dir`. `run_folder.py` loads the models
 once, skips any `*_products.nc` files, and continues past individual scene
-failures (reporting them in a summary).
+failures (reporting them in a summary). Scenes whose COGs already exist are
+skipped unless `--overwrite` is passed, so an interrupted backfill can just
+be re-run. `--limit N` processes only the first N pending scenes, which is
+handy for a quick test.
+
+### 3. Build the JSON catalogs
+
+```bash
+python make_json.py                                  # ./output -> ./json
+python make_json.py /path/to/output --json-dir /path/to/json
+python make_json.py --base-url https://example.com/data
+```
+
+`make_json.py` reads the COGs on disk, so it can be re-run at any time
+without reprocessing.
 
 ## Outputs
 
-For an input named `PACE_OCI.<YYYYMMDD>T<HHMMSS>.L2.OC_AOP.<ver>.nc`, the
-`output/` folder receives one date-named COG per product:
+Each input granule produces one COG per product, named after the granule and
+placed in a per-product subfolder. For an input
+`PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.nc`:
 
-- `PACE_OCI-<YYYYMMDD>-chla.tif`
-- `PACE_OCI-<YYYYMMDD>-tss.tif`
-- `PACE_OCI-<YYYYMMDD>-acdom.tif`
+```
+output/chla/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+output/tss/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+output/acdom/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+```
 
-The date is parsed from the input filename. When several PACE passes share a
-date, the pass with the most valid retrieval pixels is kept (best pass per
-day).
+Every pass is kept. PACE often crosses the region several times a day, so a
+date with four passes yields four COGs per product — nothing is collapsed to
+a single "best pass".
+
+### JSON catalogs
+
+`make_json.py` writes one catalog per acquisition date and product,
+`json/<YYYYMMDD>_<product>.json`, listing every pass from that date as a
+minimal GeoJSON `FeatureCollection` (the same shape as
+[this NAIP catalog](https://data.source.coop/giswqs/opengeos/naip_nd_2023_stac.json)):
+
+```json
+{"type":"FeatureCollection","features":[{"bbox":[-96.769775,-1.638628,-67.06871,26.577588],"assets":{"image":{"href":"https://huggingface.co/datasets/giswqs/PACE-Water-Quality/resolve/main/data/chla/PACE_OCI.20260322T181227.L2.OC_AOP.V3_2.tif"}}}]}
+```
+
+The files are written compact (no indentation), like the reference catalog.
+
+The `bbox` is read from the COG and the `href` points at the published copy.
+The base URL defaults to the Hugging Face dataset and can be changed with
+`--base-url`.
 
 ### About the COGs
 
@@ -116,16 +155,17 @@ scene reproduces the same products.
 ## Automated daily products
 
 A GitHub Actions workflow (`.github/workflows/daily.yml`) runs every day
-(and on demand via *Run workflow*). It downloads the most recent PACE scene,
-runs inference, and publishes the resulting GeoTIFFs to two places:
+(and on demand via *Run workflow*). It downloads every PACE pass from the
+most recent available date, runs inference, and publishes the results to the
+**Hugging Face dataset** https://huggingface.co/datasets/giswqs/PACE-Water-Quality:
 
-- the repository's **`PACE-Data`** release:
-  https://github.com/giswqs/PACE-Water-Quality/releases/tag/PACE-Data
-- the **Hugging Face dataset** (under `cogs/`):
-  https://huggingface.co/datasets/giswqs/PACE-Water-Quality
+- COGs under `data/<product>/`:
+  https://huggingface.co/datasets/giswqs/PACE-Water-Quality/resolve/main/data/
+- JSON catalogs under `json/`:
+  https://huggingface.co/datasets/giswqs/PACE-Water-Quality/resolve/main/json/
 
-Because output filenames include the acquisition date, products from
-different dates accumulate while same-date files are replaced.
+Because COG filenames are the granule names, products accumulate without
+ever colliding, and re-running a scene simply replaces its own files.
 
 ### Required repository secrets
 
@@ -136,9 +176,9 @@ The workflow needs the following secrets under
 - `EARTHDATA_PASSWORD` — NASA Earthdata password
 - `HF_TOKEN` — Hugging Face token with write access to the dataset
 
-The `data/` and `output/` folders are git-ignored, so large scenes and
-products are never committed; the daily run regenerates them and publishes
-only the GeoTIFFs to the release.
+The `data/`, `output/` and `json/` folders are git-ignored, so large scenes
+and products are never committed; the daily run regenerates them and
+publishes the COGs and catalogs to Hugging Face.
 
 ## Notes
 

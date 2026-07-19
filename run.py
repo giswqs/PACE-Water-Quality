@@ -11,7 +11,7 @@ from rio_cogeo.profiles import cog_profiles
 
 # Resolve paths relative to this script so it can run from any location.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.join(BASE_DIR, "code"))
+sys.path.append(os.path.join(BASE_DIR, "moe_vae"))
 from MoE_VAE import *
 from data_loading import *
 from plot_and_save import *

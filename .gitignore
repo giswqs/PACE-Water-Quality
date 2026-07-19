@@ -1,6 +1,7 @@
 # Large data and generated products - not committed to git
 data/
 output/
+json/
 
 # Python
 __pycache__/

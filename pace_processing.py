@@ -6,13 +6,22 @@ many scenes:
 
 * :func:`load_models` - build the chl-a / TSS / aCDOM models and scalers.
 * :func:`process_scene` - run inference on a single PACE L2 AOP scene and
-  write the products NetCDF plus validated Cloud Optimized GeoTIFFs.
+  write one validated Cloud Optimized GeoTIFF per product.
 * :func:`save_product_to_cog` - grid a swath product and write a valid COG.
+
+Every scene keeps its own products: a COG is named after the input granule
+and placed in a per-product subfolder, so several passes on the same date all
+survive::
+
+    output/chla/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+    output/tss/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+    output/acdom/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
 
 Entry points:
 
 * ``run_file.py`` processes a single file.
 * ``run_folder.py`` processes every scene in a folder.
+* ``make_json.py`` builds the per-date GeoJSON catalogs from the COGs.
 """
 
 import os
@@ -29,7 +38,7 @@ from rio_cogeo.profiles import cog_profiles
 
 # Resolve paths relative to this module so it can run from any location.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(os.path.join(BASE_DIR, "code"))
+sys.path.append(os.path.join(BASE_DIR, "moe_vae"))
 
 from MoE_VAE import *  # noqa: E402,F401,F403
 from data_loading import *  # noqa: E402,F401,F403
@@ -190,8 +199,15 @@ SELECTED_BANDS = [
     719,
 ]
 
-# Map dataset variable -> output filename label (aCDOM drops the "440").
+# Map dataset variable -> output subfolder label (aCDOM drops the "440").
 PRODUCT_LABELS = {"chla": "chla", "tss": "tss", "acdom440": "acdom"}
+
+# Base URL the published COGs are served from. The per-date JSON catalogs
+# reference the COGs here, mirroring the local ``<product>/<granule>.tif``
+# layout of the output folder.
+HF_DATA_URL = (
+    "https://huggingface.co/datasets/giswqs/PACE-Water-Quality/resolve/main/data"
+)
 
 
 def load_models(model_dir, device):
@@ -425,6 +441,40 @@ def parse_acquisition_date(nc_path):
     return match.group(1)
 
 
+def scene_stem(nc_path):
+    """Return the granule name without its extension.
+
+    The stem is reused verbatim as the COG filename, so an output can always
+    be traced back to the exact granule it came from.
+
+    Args:
+        nc_path (str): Path to the PACE NetCDF file, e.g.
+            ``PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.nc``.
+
+    Returns:
+        str: The filename without directory or extension, e.g.
+            ``"PACE_OCI.20240929T185124.L2.OC_AOP.V3_2"``.
+    """
+    return os.path.splitext(os.path.basename(nc_path))[0]
+
+
+def scene_cog_paths(save_dir, stem):
+    """Build the COG output path for every product of one scene.
+
+    Args:
+        save_dir (str): Root output directory.
+        stem (str): Granule stem from :func:`scene_stem`.
+
+    Returns:
+        dict: Mapping of product label (``chla``/``tss``/``acdom``) to the
+            path ``<save_dir>/<label>/<stem>.tif``.
+    """
+    return {
+        label: os.path.join(save_dir, label, f"{stem}.tif")
+        for label in PRODUCT_LABELS.values()
+    }
+
+
 def infer_scene_maps(nc_path, models):
     """Run inference on one PACE scene and return the product maps in memory.
 
@@ -491,23 +541,28 @@ def infer_scene_maps(nc_path, models):
     }
 
 
-def write_scene_cogs(maps, save_dir, date):
-    """Write the in-memory product maps to date-named direct COGs.
+def write_scene_cogs(maps, save_dir, stem):
+    """Write the in-memory product maps to granule-named COGs.
+
+    Each product goes to ``<save_dir>/<label>/<stem>.tif``, so every pass of a
+    given date produces its own set of files instead of overwriting the others.
 
     Args:
         maps (dict): Output of :func:`infer_scene_maps`.
-        save_dir (str): Output directory.
-        date (str): Acquisition date (YYYYMMDD) used in the filename.
+        save_dir (str): Root output directory.
+        stem (str): Granule stem from :func:`scene_stem`.
 
     Returns:
         list[str]: Paths to the written COGs.
     """
-    os.makedirs(save_dir, exist_ok=True)
+    out_paths = scene_cog_paths(save_dir, stem)
     paths = []
     for var, label in PRODUCT_LABELS.items():
+        out_tif = out_paths[label]
+        os.makedirs(os.path.dirname(out_tif), exist_ok=True)
         paths.append(
             save_product_to_cog(
-                out_tif=os.path.join(save_dir, f"PACE_OCI-{date}-{label}.tif"),
+                out_tif=out_tif,
                 lat_2d=maps["latitude"],
                 lon_2d=maps["longitude"],
                 values_2d=maps[var],
@@ -517,16 +572,16 @@ def write_scene_cogs(maps, save_dir, date):
 
 
 def process_scene(nc_path, models, save_dir):
-    """Run inference on one PACE scene and write direct (no-interp) COGs.
+    """Run inference on one PACE scene and write its per-product COGs.
 
     Args:
         nc_path (str): Path to the input PACE L2 AOP NetCDF file.
         models (dict): Loaded models/scalers from :func:`load_models`.
-        save_dir (str): Directory to write the products into.
+        save_dir (str): Root directory to write the products into.
 
     Returns:
         list[str]: Paths to the written COG files.
     """
     print(f"Processing scene: {nc_path}")
     maps = infer_scene_maps(nc_path, models)
-    return write_scene_cogs(maps, save_dir, parse_acquisition_date(nc_path))
+    return write_scene_cogs(maps, save_dir, scene_stem(nc_path))

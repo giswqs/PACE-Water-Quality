@@ -1,15 +1,23 @@
-"""Process PACE L2 AOP scenes in a folder into daily water-quality COGs.
+"""Process PACE L2 AOP scenes in a folder into per-scene water-quality COGs.
 
-For each acquisition date, every PACE pass in the folder is run through the
-models and the pass with the most valid retrieval pixels is kept, written as
-date-named Cloud Optimized GeoTIFFs (chl-a, TSS, aCDOM) in the output folder.
-Products are written directly from the swath (no gridding/interpolation), so
-each pixel keeps its exact model value.
+Every PACE pass in the folder is run through the models and written as
+validated Cloud Optimized GeoTIFFs (chl-a, TSS, aCDOM). Each COG keeps the
+granule name of its input and lives in a per-product subfolder, so dates with
+several passes keep every pass::
+
+    output/chla/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+    output/tss/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+    output/acdom/PACE_OCI.20240929T185124.L2.OC_AOP.V3_2.tif
+
+Products are gridded from the swath onto a regular EPSG:4326 grid. Scenes
+whose COGs already exist are skipped unless ``--overwrite`` is passed, so an
+interrupted backfill can simply be re-run.
 
 Examples::
 
     python run_folder.py                       # process ./data -> ./output
     python run_folder.py /media/hdd/Data/PACE/data --output /media/hdd/Data/PACE/output
+    python run_folder.py --json-dir /media/hdd/Data/PACE/json
 
 To process a single file, use ``run_file.py``.
 """
@@ -17,7 +25,6 @@ To process a single file, use ``run_file.py``.
 import os
 import glob
 import argparse
-from collections import defaultdict
 
 import torch
 
@@ -26,12 +33,14 @@ from pace_processing import (
     load_models,
     infer_scene_maps,
     write_scene_cogs,
+    scene_stem,
+    scene_cog_paths,
     parse_acquisition_date,
 )
 
 parser = argparse.ArgumentParser(
-    description="Process PACE scenes in a folder into daily water-quality COGs "
-    "(best pass per day)."
+    description="Process every PACE scene in a folder into per-scene "
+    "water-quality COGs."
 )
 parser.add_argument(
     "folder",
@@ -54,52 +63,86 @@ parser.add_argument(
     default="*.nc",
     help="Glob pattern for input files (default: *.nc).",
 )
+parser.add_argument(
+    "--overwrite",
+    action="store_true",
+    help="Reprocess scenes whose COGs already exist (default: skip them).",
+)
+parser.add_argument(
+    "--json-dir",
+    default=None,
+    help="If set, write the per-date GeoJSON catalogs here after processing.",
+)
+parser.add_argument(
+    "--limit",
+    type=int,
+    default=None,
+    help="Process at most this many scenes (useful for a quick test run).",
+)
 args = parser.parse_args()
 
 if not os.path.isdir(args.folder):
     raise NotADirectoryError(f"Input folder not found: {args.folder}")
 
-# Group input scenes by acquisition date (skip any products files).
-by_date = defaultdict(list)
-for path in sorted(glob.glob(os.path.join(args.folder, args.pattern))):
-    if path.endswith("_products.nc"):
-        continue
-    by_date[parse_acquisition_date(path)].append(path)
+# Collect input scenes (skip any products files written by older runs).
+scenes = [
+    path
+    for path in sorted(glob.glob(os.path.join(args.folder, args.pattern)))
+    if not path.endswith("_products.nc")
+]
 
-if not by_date:
+if not scenes:
     raise FileNotFoundError(
         f"No files matching '{args.pattern}' found in {args.folder}"
     )
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
-n_scenes = sum(len(v) for v in by_date.values())
-print(f"Found {n_scenes} scene(s) across {len(by_date)} date(s) in {args.folder}")
+# Skip scenes that already have a complete set of COGs.
+if not args.overwrite:
+    pending = [
+        path
+        for path in scenes
+        if not all(
+            os.path.isfile(p)
+            for p in scene_cog_paths(args.output, scene_stem(path)).values()
+        )
+    ]
+    n_skipped = len(scenes) - len(pending)
+    if n_skipped:
+        print(f"Skipping {n_skipped} scene(s) that already have COGs.")
+    scenes = pending
 
-models = load_models(args.model_dir, device)
+if args.limit is not None:
+    scenes = scenes[: args.limit]
 
-succeeded, failed = [], []
-for date in sorted(by_date):
-    passes = by_date[date]
-    print(f"\n[{date}] {len(passes)} pass(es)")
-    best_maps, best_pass = None, None
-    for nc_path in passes:
+if not scenes:
+    print("Nothing to process.")
+else:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"Using device: {device}")
+    dates = {parse_acquisition_date(p) for p in scenes}
+    print(f"Processing {len(scenes)} scene(s) across {len(dates)} date(s)")
+
+    models = load_models(args.model_dir, device)
+
+    succeeded, failed = [], []
+    for i, nc_path in enumerate(scenes, start=1):
+        name = os.path.basename(nc_path)
+        print(f"\n[{i}/{len(scenes)}] {name}")
         try:
             maps = infer_scene_maps(nc_path, models)
-        except Exception as exc:  # noqa: BLE001 - keep batch going on failure
-            print(f"  FAILED {os.path.basename(nc_path)}: {exc}")
+            print(f"  {maps['valid']} valid pixels")
+            write_scene_cogs(maps, args.output, scene_stem(nc_path))
+        except Exception as exc:  # noqa: BLE001 - keep the batch going
+            print(f"  FAILED: {exc}")
             failed.append((nc_path, exc))
             continue
-        print(f"  {os.path.basename(nc_path)}: {maps['valid']} valid pixels")
-        if best_maps is None or maps["valid"] > best_maps["valid"]:
-            best_maps, best_pass = maps, nc_path
+        succeeded.append(nc_path)
 
-    if best_maps is None:
-        continue
-    print(f"  -> best: {os.path.basename(best_pass)} ({best_maps['valid']} px)")
-    write_scene_cogs(best_maps, args.output, date)
-    succeeded.append(date)
+    print(f"\nDone. {len(succeeded)} scene(s) written, {len(failed)} failed.")
+    for nc_path, exc in failed:
+        print(f"  - {os.path.basename(nc_path)}: {exc}")
 
-print(f"\nDone. {len(succeeded)} date(s) written, {len(failed)} pass(es) failed.")
-for nc_path, exc in failed:
-    print(f"  - {os.path.basename(nc_path)}: {exc}")
+if args.json_dir:
+    from make_json import build_catalogs
+
+    build_catalogs(args.output, args.json_dir)
