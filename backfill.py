@@ -251,6 +251,12 @@ def main():
         help="Bounding box (default: Gulf of Mexico).",
     )
     parser.add_argument(
+        "--newest-first",
+        action="store_true",
+        help="Walk the months newest to oldest, so the most recent data is "
+        "published first (default: oldest to newest).",
+    )
+    parser.add_argument(
         "--no-upload",
         action="store_true",
         help="Skip the Hugging Face upload step.",
@@ -274,7 +280,10 @@ def main():
     )
     done = load_state(state_path)
     months = month_range(args.start, args.end)
-    print(f"Backfill {args.start} .. {args.end}: {len(months)} month(s)")
+    if args.newest_first:
+        months.reverse()
+    order = "newest first" if args.newest_first else "oldest first"
+    print(f"Backfill {args.start} .. {args.end}: {len(months)} month(s), {order}")
     print(f"State file: {state_path} ({len(done)} month(s) already done)\n")
 
     for year, month in months:
