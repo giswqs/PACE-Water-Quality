@@ -319,7 +319,10 @@ def main():
             save_state(state_path, done)
             continue
 
-        # 2. Inference (already-processed scenes are skipped internally).
+        # 2. Inference, scoped to this month's granules. Without the pattern
+        # a leftover granule from another month would be processed here and
+        # billed to the wrong month (harmless, but it muddies the logs and
+        # the month's timing).
         run(
             [
                 sys.executable,
@@ -330,6 +333,8 @@ def main():
                 args.output,
                 "--model-dir",
                 args.model_dir,
+                "--pattern",
+                f"PACE_OCI.{year:04d}{month:02d}*.nc",
             ],
             args.dry_run,
         )
