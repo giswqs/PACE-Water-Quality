@@ -38,6 +38,7 @@ import re
 import sys
 import glob
 import json
+import time
 import argparse
 import subprocess
 from datetime import date, timedelta
@@ -84,45 +85,66 @@ def month_bounds(year, month):
 
 
 def load_state(path):
-    """Read the set of months already completed.
+    """Read the completed months and the known-empty granule stems.
 
     Args:
         path (str): Path to the JSON state file.
 
     Returns:
-        set[str]: Completed months as ``"YYYY-MM"`` strings.
+        tuple[set[str], set[str]]: ``(done, empty)`` where ``done`` holds
+            completed months as ``"YYYY-MM"`` strings and ``empty`` holds the
+            stems of granules that carry no valid retrievals (e.g. nighttime
+            passes) and are therefore expected to yield no COGs.
     """
     if not os.path.isfile(path):
-        return set()
+        return set(), set()
     with open(path) as f:
-        return set(json.load(f).get("done", []))
+        state = json.load(f)
+    return set(state.get("done", [])), set(state.get("empty", []))
 
 
-def save_state(path, done):
-    """Persist the set of completed months.
+def save_state(path, done, empty):
+    """Persist the completed months and the known-empty granule stems.
 
     Args:
         path (str): Path to the JSON state file.
         done (set[str]): Completed months.
+        empty (set[str]): Stems of granules with no valid retrievals.
     """
     with open(path, "w") as f:
-        json.dump({"done": sorted(done)}, f, indent=1)
+        json.dump({"done": sorted(done), "empty": sorted(empty)}, f, indent=1)
 
 
-def run(cmd, dry_run=False):
-    """Run a subprocess, raising if it fails.
+def run(cmd, dry_run=False, retries=0, retry_wait=30):
+    """Run a subprocess, optionally retrying on failure.
 
     Args:
         cmd (list[str]): Command and arguments.
         dry_run (bool): If True, only print the command.
+        retries (int): Extra attempts after the first on a non-zero exit.
+            Used for the download step, whose failures (Earthdata connection
+            resets) are transient and clear on a retry.
+        retry_wait (int): Seconds to wait between attempts.
 
     Raises:
-        subprocess.CalledProcessError: If the command exits non-zero.
+        subprocess.CalledProcessError: If every attempt exits non-zero.
     """
     print("  $", " ".join(cmd), flush=True)
     if dry_run:
         return
-    subprocess.run(cmd, check=True)
+    for attempt in range(retries + 1):
+        try:
+            subprocess.run(cmd, check=True)
+            return
+        except subprocess.CalledProcessError:
+            if attempt == retries:
+                raise
+            print(
+                f"  attempt {attempt + 1}/{retries + 1} failed; "
+                f"retrying in {retry_wait}s",
+                flush=True,
+            )
+            time.sleep(retry_wait)
 
 
 def month_granules(data_dir, year, month):
@@ -278,14 +300,18 @@ def main():
     state_path = args.state or os.path.join(
         os.path.dirname(os.path.abspath(args.data_dir)), "backfill_state.json"
     )
-    done = load_state(state_path)
+    done, empty = load_state(state_path)
     months = month_range(args.start, args.end)
     if args.newest_first:
         months.reverse()
     order = "newest first" if args.newest_first else "oldest first"
     print(f"Backfill {args.start} .. {args.end}: {len(months)} month(s), {order}")
-    print(f"State file: {state_path} ({len(done)} month(s) already done)\n")
+    print(
+        f"State file: {state_path} "
+        f"({len(done)} month(s) done, {len(empty)} empty granule(s) known)\n"
+    )
 
+    failed_months = []
     for year, month in months:
         tag = f"{year:04d}-{month:02d}"
         if tag in done:
@@ -294,96 +320,121 @@ def main():
         first, last = month_bounds(year, month)
         print(f"\n=== [{tag}] {first} .. {last} ===", flush=True)
 
-        # 1. Download this month's granules.
-        run(
-            [
-                sys.executable,
-                os.path.join(BASE_DIR, "download_data.py"),
-                first,
-                last,
-                "--count",
-                "-1",
-                "--bbox",
-                *[str(v) for v in args.bbox],
-                "--out-dir",
-                args.data_dir,
-            ],
-            args.dry_run,
-        )
+        # A whole month is wrapped so a transient failure (an Earthdata
+        # connection reset, a flaky upload) drops just that month and the
+        # backfill moves on. A month that throws is not marked done, so the
+        # next run retries it from scratch.
+        try:
+            # 1. Download this month's granules. Retried, since Earthdata
+            # occasionally resets the connection mid-transfer.
+            run(
+                [
+                    sys.executable,
+                    os.path.join(BASE_DIR, "download_data.py"),
+                    first,
+                    last,
+                    "--count",
+                    "-1",
+                    "--bbox",
+                    *[str(v) for v in args.bbox],
+                    "--out-dir",
+                    args.data_dir,
+                ],
+                args.dry_run,
+                retries=3,
+            )
 
-        granules = month_granules(args.data_dir, year, month)
-        print(f"  {len(granules)} granule(s) on disk for {tag}")
-        if not granules and not args.dry_run:
-            print(f"  no granules for {tag}; marking done")
+            granules = month_granules(args.data_dir, year, month)
+
+            # Drop granules already known to be empty (nighttime/off-region
+            # passes) so they are not reprocessed on every resume.
+            if not args.dry_run:
+                kept = []
+                for nc in granules:
+                    if scene_stem(nc) in empty:
+                        os.remove(nc)
+                    else:
+                        kept.append(nc)
+                granules = kept
+            print(f"  {len(granules)} granule(s) on disk for {tag}")
+            if not granules and not args.dry_run:
+                print(f"  no granules for {tag}; marking done")
+                done.add(tag)
+                save_state(state_path, done, empty)
+                continue
+
+            # 2. Inference, scoped to this month's granules. Without the
+            # pattern a leftover granule from another month would be
+            # processed here and billed to the wrong month.
+            run(
+                [
+                    sys.executable,
+                    "-u",
+                    os.path.join(BASE_DIR, "run_folder.py"),
+                    args.data_dir,
+                    "--output",
+                    args.output,
+                    "--model-dir",
+                    args.model_dir,
+                    "--pattern",
+                    f"PACE_OCI.{year:04d}{month:02d}*.nc",
+                ],
+                args.dry_run,
+            )
+
+            # 3. Verify before anything irreversible happens. A granule that
+            # was processed but produced no COGs carries no valid retrievals
+            # (a nighttime pass); it is recorded as empty so it stops
+            # blocking the month and is skipped on future runs. Inference is
+            # deterministic, so this will not change on a retry.
+            if args.dry_run:
+                verified, missing = granules, []
+            else:
+                verified, missing = verify_cogs(granules, args.output)
+            print(f"  verified {len(verified)}/{len(granules)} granule(s)")
+            for nc in missing:
+                stem = scene_stem(nc)
+                print(f"    EMPTY (no valid retrievals): {os.path.basename(nc)}")
+                empty.add(stem)
+
+            # 4. Rebuild the catalogs (cheap, and keeps them consistent).
+            run(
+                [
+                    sys.executable,
+                    os.path.join(BASE_DIR, "make_json.py"),
+                    args.output,
+                    "--json-dir",
+                    args.json_dir,
+                    "--base-url",
+                    HF_DATA_URL,
+                ],
+                args.dry_run,
+            )
+
+            # 5. Publish.
+            if not args.no_upload and verified:
+                upload_month(args.output, args.json_dir, verified, args.dry_run)
+
+            # 6. Reclaim disk. Verified granules are done; empty granules
+            # will never yield COGs, so drop them too.
+            if not args.keep_nc and not args.dry_run:
+                for nc in verified + missing:
+                    os.remove(nc)
+                print(f"  deleted {len(verified) + len(missing)} granule(s)")
+
+            # 7. Every granule is now resolved (verified or empty), so the
+            # month is complete.
             done.add(tag)
-            save_state(state_path, done)
+            if not args.dry_run:
+                save_state(state_path, done, empty)
+        except Exception as exc:  # noqa: BLE001 - one bad month must not stop the run
+            print(f"  [{tag}] MONTH FAILED: {type(exc).__name__}: {exc}", flush=True)
+            failed_months.append(tag)
             continue
 
-        # 2. Inference, scoped to this month's granules. Without the pattern
-        # a leftover granule from another month would be processed here and
-        # billed to the wrong month (harmless, but it muddies the logs and
-        # the month's timing).
-        run(
-            [
-                sys.executable,
-                "-u",
-                os.path.join(BASE_DIR, "run_folder.py"),
-                args.data_dir,
-                "--output",
-                args.output,
-                "--model-dir",
-                args.model_dir,
-                "--pattern",
-                f"PACE_OCI.{year:04d}{month:02d}*.nc",
-            ],
-            args.dry_run,
-        )
-
-        # 3. Verify before anything irreversible happens.
-        if args.dry_run:
-            verified, missing = granules, []
-        else:
-            verified, missing = verify_cogs(granules, args.output)
-        print(f"  verified {len(verified)}/{len(granules)} granule(s)")
-        for nc in missing:
-            print(f"    INCOMPLETE: {os.path.basename(nc)}")
-
-        # 4. Rebuild the catalogs (cheap, and keeps them consistent).
-        run(
-            [
-                sys.executable,
-                os.path.join(BASE_DIR, "make_json.py"),
-                args.output,
-                "--json-dir",
-                args.json_dir,
-                "--base-url",
-                HF_DATA_URL,
-            ],
-            args.dry_run,
-        )
-
-        # 5. Publish.
-        if not args.no_upload and verified:
-            upload_month(args.output, args.json_dir, verified, args.dry_run)
-
-        # 6. Reclaim disk, but only for granules whose COGs are verified.
-        if not args.keep_nc:
-            print(f"  deleting {len(verified)} verified granule(s)")
-            if not args.dry_run:
-                for nc in verified:
-                    os.remove(nc)
-        if missing:
-            print(f"  keeping {len(missing)} granule(s) with incomplete COGs")
-
-        # 7. A month counts as done only if every granule was verified.
-        if not missing:
-            done.add(tag)
-            if not args.dry_run:
-                save_state(state_path, done)
-        else:
-            print(f"  [{tag}] NOT marked done ({len(missing)} incomplete)")
-
     print(f"\nBackfill finished. {len(done)}/{len(months)} month(s) complete.")
+    if failed_months:
+        print(f"Failed month(s), will retry next run: {', '.join(failed_months)}")
 
 
 if __name__ == "__main__":
