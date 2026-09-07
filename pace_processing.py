@@ -25,9 +25,9 @@ Entry points:
 """
 
 import os
+import pickle
 import re
 import sys
-import pickle
 
 import numpy as np
 import torch
@@ -40,10 +40,10 @@ from rio_cogeo.profiles import cog_profiles
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, "moe_vae"))
 
-from MoE_VAE import *  # noqa: E402,F401,F403
-from data_loading import *  # noqa: E402,F401,F403
-from plot_and_save import *  # noqa: E402,F401,F403
-from model_inference import *  # noqa: E402,F401,F403
+from data_loading import *
+from model_inference import *
+from MoE_VAE import *
+from plot_and_save import *
 
 # Wavelengths (nm) used as model input features.
 SELECTED_BANDS = [
