@@ -1,9 +1,9 @@
 import torch
-import torch.nn as nn
+from torch import nn
 from torch.distributions.normal import Normal
 
 
-class SparseDispatcher(object):
+class SparseDispatcher:
 
     def __init__(self, num_experts, gates):
         self._gates = gates
@@ -94,7 +94,7 @@ class VAE(nn.Module):
 
 class MoE(nn.Module):
     def __init__(self, input_size, output_size, num_experts, noisy_gating=False, k=4):
-        super(MoE, self).__init__()
+        super().__init__()
 
         self.noisy_gating = noisy_gating
         self.num_experts = num_experts
@@ -213,7 +213,7 @@ class TokenMoEModel(nn.Module):
     def __init__(
         self, input_size, output_size, num_experts, k=4, token_size=16, stride=8
     ):
-        super(TokenMoEModel, self).__init__()
+        super().__init__()
 
         self.input_size = input_size
         self.output_size = output_size
