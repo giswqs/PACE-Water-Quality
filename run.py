@@ -1,9 +1,10 @@
-import torch
-import numpy as np
-import os
-import sys
-import pickle
 import argparse
+import os
+import pickle
+import sys
+
+import numpy as np
+import torch
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from rio_cogeo.cogeo import cog_translate, cog_validate
@@ -12,10 +13,10 @@ from rio_cogeo.profiles import cog_profiles
 # Resolve paths relative to this script so it can run from any location.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(os.path.join(BASE_DIR, "moe_vae"))
-from MoE_VAE import *
 from data_loading import *
-from plot_and_save import *
 from model_inference import *
+from MoE_VAE import *
+from plot_and_save import *
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Using device: {device}")
@@ -453,6 +454,7 @@ def save_product_to_cog(
 # Cloud Optimized GeoTIFFs
 # ============================
 import re
+
 import xarray as xr
 
 # Parse the acquisition date (YYYYMMDD) from the input filename, e.g.
