@@ -1,15 +1,16 @@
-import torch
-import numpy as np
-from torch.utils.data import DataLoader, TensorDataset
-from sklearn.preprocessing import MinMaxScaler
-import matplotlib.pyplot as plt
 import os
-import hypercoast
-from scipy.interpolate import griddata
-import rasterio
-from rasterio.transform import from_origin
-from netCDF4 import Dataset
 import re
+
+import hypercoast
+import matplotlib.pyplot as plt
+import numpy as np
+import rasterio
+import torch
+from netCDF4 import Dataset
+from rasterio.transform import from_origin
+from scipy.interpolate import griddata
+from sklearn.preprocessing import MinMaxScaler
+from torch.utils.data import DataLoader, TensorDataset
 
 
 def preprocess_pace_data_Robust(
@@ -1056,12 +1057,11 @@ def preprocess_infer_pace_minmax(
     batch_size=2048,
     log_offset=1,
 ):
+    import hypercoast
     import numpy as np
     import torch
-    import hypercoast
-
-    from torch.utils.data import TensorDataset, DataLoader
     from sklearn.preprocessing import MinMaxScaler
+    from torch.utils.data import DataLoader, TensorDataset
 
     # ============================
     # Read PACE
@@ -1173,11 +1173,10 @@ def preprocess_infer_pace_robust(
     use_spectral_mask=True,
     batch_size=2048,
 ):
+    import hypercoast
     import numpy as np
     import torch
-    import hypercoast
-
-    from torch.utils.data import TensorDataset, DataLoader
+    from torch.utils.data import DataLoader, TensorDataset
 
     try:
         print(f"Start processing: {nc_path}")
@@ -1362,9 +1361,10 @@ def save_pace_products_to_nc(
     nc_path, save_dir, chla_output, tss_output, acdom_output, output_name=None
 ):
     import os
+
+    import hypercoast
     import numpy as np
     import xarray as xr
-    import hypercoast
 
     # =====================================================
     # Read original PACE geometry

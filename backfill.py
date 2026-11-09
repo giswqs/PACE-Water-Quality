@@ -33,17 +33,17 @@ A NASA Earthdata login (``~/.netrc``) and, unless ``--no-upload`` is given, a
 Hugging Face token are required.
 """
 
-import os
-import re
-import sys
+import argparse
 import glob
 import json
-import time
-import argparse
+import os
+import re
 import subprocess
+import sys
+import time
 from datetime import date, timedelta
 
-from pace_processing import BASE_DIR, PRODUCT_LABELS, HF_DATA_URL, scene_stem
+from pace_processing import BASE_DIR, HF_DATA_URL, PRODUCT_LABELS, scene_stem
 
 HF_REPO = "giswqs/PACE-Water-Quality"
 DEFAULT_BBOX = (-98.0, 18.0, -80.0, 31.0)
