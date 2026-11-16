@@ -22,20 +22,20 @@ Examples::
 To process a single file, use ``run_file.py``.
 """
 
-import os
-import glob
 import argparse
+import glob
+import os
 
 import torch
 
 from pace_processing import (
     BASE_DIR,
-    load_models,
     infer_scene_maps,
-    write_scene_cogs,
-    scene_stem,
-    scene_cog_paths,
+    load_models,
     parse_acquisition_date,
+    scene_cog_paths,
+    scene_stem,
+    write_scene_cogs,
 )
 
 parser = argparse.ArgumentParser(
